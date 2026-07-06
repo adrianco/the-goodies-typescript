@@ -6,6 +6,7 @@
  */
 
 import type { AuthManager } from '../auth';
+import { createVersion, versionTimestamp } from './version';
 
 export interface SyncChange {
   change_type: 'create' | 'update' | 'delete';
@@ -77,6 +78,11 @@ export interface SyncResponse {
   vector_clock: VectorClock;
   cursor?: string;
   sync_stats: SyncStats;
+  /**
+   * UTC ISO-8601 server clock at response time. The client persists this and
+   * sends it back as filters.since on the next delta sync (PROTOCOL.md §4).
+   */
+  server_time?: string;
 }
 
 export interface Change {
@@ -165,7 +171,7 @@ export class InbetweeniesProtocol {
       change_type: change.operation,
       entity: change.data ? {
         id: change.entityId,
-        version: change.version || `v-${Date.now()}`,
+        version: change.version || createVersion(change.data.userId || change.data.user_id || this.userId),
         entity_type: change.data.entityType || change.data.entity_type || 'NOTE',
         name: change.data.name || '',
         content: change.data.content || {},
@@ -226,7 +232,9 @@ export class InbetweeniesProtocol {
         parentVersions: sc.entity.parent_versions || [],
       } : {},
       version: sc.entity?.version,
-      timestamp: new Date().toISOString(),
+      // Derive the modification time from the version (the wire EntityChange has
+      // no updated_at; the version encodes the UTC edit time), NOT the local clock.
+      timestamp: (versionTimestamp(sc.entity?.version) ?? new Date()).toISOString(),
     }));
 
     const conflicts: Conflict[] = response.conflicts.map(ci => ({

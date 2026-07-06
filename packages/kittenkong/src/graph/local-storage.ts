@@ -58,7 +58,17 @@ export class LocalGraphStorage {
   }
 
   /**
-   * Get all entities of a given type (latest versions only)
+   * Is this the live (non-tombstoned) form of an entity? A delete is a version
+   * with content.deleted=true (PROTOCOL.md §8); such entities are excluded from
+   * active-view results but their rows are retained for sync.
+   */
+  private isActive(entity: Entity | null): boolean {
+    const content = entity?.content as Record<string, any> | undefined;
+    return !!entity && content?.deleted !== true;
+  }
+
+  /**
+   * Get all entities of a given type (latest, non-tombstoned versions)
    */
   getEntitiesByType(entityType: EntityType): Entity[] {
     const ids = this.typeIndex.get(entityType);
@@ -67,7 +77,7 @@ export class LocalGraphStorage {
     const results: Entity[] = [];
     for (const id of ids) {
       const entity = this.getEntity(id);
-      if (entity) results.push(entity);
+      if (this.isActive(entity)) results.push(entity!);
     }
     return results;
   }
@@ -118,7 +128,7 @@ export class LocalGraphStorage {
     const results: Entity[] = [];
     for (const id of deviceIds) {
       const entity = this.getEntity(id);
-      if (entity) results.push(entity);
+      if (this.isActive(entity)) results.push(entity!);
     }
     return results;
   }
@@ -140,7 +150,7 @@ export class LocalGraphStorage {
 
     for (const [_id, versions] of this.entities) {
       const entity = versions[versions.length - 1];
-      if (!entity) continue;
+      if (!this.isActive(entity)) continue;
 
       if (entityTypes && !entityTypes.includes(entity.entityType)) continue;
 
@@ -161,8 +171,9 @@ export class LocalGraphStorage {
   getAllEntities(): Entity[] {
     const results: Entity[] = [];
     for (const versions of this.entities.values()) {
-      if (versions.length > 0) {
-        results.push(versions[versions.length - 1]);
+      const entity = versions[versions.length - 1];
+      if (this.isActive(entity)) {
+        results.push(entity);
       }
     }
     return results;

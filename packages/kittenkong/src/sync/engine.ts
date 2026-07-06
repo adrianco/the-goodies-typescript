@@ -9,6 +9,7 @@ import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict } f
 import type { AuthManager } from '../auth';
 import { InbetweeniesProtocol, type Change } from './protocol';
 import { ConflictResolver } from './conflict-resolver';
+import { createVersion } from './version';
 import { LocalGraphOperations } from '../graph/local-operations';
 
 export type SyncObserver = (event: string, data: any) => void | Promise<void>;
@@ -157,9 +158,14 @@ export class SyncEngine {
         }
       }
 
-      // Update metadata
+      // Update metadata. The delta watermark is the SERVER's clock from the
+      // response (server_time), NOT the client's local time — we replay it as
+      // filters.since next sync (PROTOCOL.md §4). Fall back to local time only
+      // if an older server omits server_time.
       const duration = (Date.now() - startTime) / 1000;
-      this.metadata.lastSyncTime = new Date();
+      this.metadata.lastSyncTime = serverResponse.server_time
+        ? new Date(serverResponse.server_time)
+        : new Date();
       this.metadata.lastSuccessTime = new Date();
       this.metadata.totalConflicts += allConflicts.length;
       this.metadata.lastError = undefined;
@@ -266,7 +272,7 @@ export class SyncEngine {
     try {
       const entity: Entity = {
         id: change.entityId,
-        version: change.version || `v-${Date.now()}`,
+        version: change.version || createVersion(change.data.userId || 'system'),
         entityType: (change.data.entityType || 'NOTE').toUpperCase() as any,
         name: change.data.name || '',
         content: change.data.content || {},

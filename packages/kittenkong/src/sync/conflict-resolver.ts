@@ -17,49 +17,40 @@ export interface ConflictData {
 export type ResolutionReason =
   | 'newer_local'
   | 'newer_remote'
-  | 'sync_id_tiebreak_local'
-  | 'sync_id_tiebreak_remote'
-  | 'local_deleted'
-  | 'remote_deleted'
-  | 'missing_timestamp';
+  | 'version_tiebreak_local'
+  | 'version_tiebreak_remote';
 
 export class ConflictResolver {
   /**
-   * Resolve a conflict between local and remote versions.
-   * Returns the winning data and the reason for the resolution.
+   * Resolve a conflict between local and remote versions — the single canonical
+   * algorithm (inbetweenies-v2, PROTOCOL.md §7):
+   *   1. Last-write-wins on the modification time (UTC).
+   *   2. If the two times are within 1000 ms, tiebreak on the **version** string:
+   *      the lexically greater version wins. The version encodes UTC time + a
+   *      monotonic counter + user id, so it is a stable, wire-visible tiebreaker
+   *      — NOT `sync_id`, which is not part of the wire model.
+   * Tombstones (deleted=true) are ordinary versions that win/lose by this rule
+   * (§8); there is no special deletion precedence.
    */
   static resolveConflict(
     local: ConflictData,
     remote: ConflictData
   ): { winner: ConflictData; reason: ResolutionReason } {
-    // Deletion takes precedence
-    if (local.deleted) {
-      return { winner: local, reason: 'local_deleted' };
-    }
-    if (remote.deleted) {
-      return { winner: remote, reason: 'remote_deleted' };
-    }
-
     const localTime = local.lastModified ? new Date(local.lastModified).getTime() : 0;
     const remoteTime = remote.lastModified ? new Date(remote.lastModified).getTime() : 0;
 
-    // Missing timestamp: prefer remote (server is more authoritative)
-    if (!local.lastModified || !remote.lastModified) {
-      return { winner: remote, reason: 'missing_timestamp' };
-    }
-
-    // Within 1 second: use sync_id as tiebreaker
+    // Within 1 second (or no usable times): tiebreak on the version string.
     const timeDiff = Math.abs(localTime - remoteTime);
-    if (timeDiff < 1000) {
-      const localSyncId = local.syncId || local.id || '';
-      const remoteSyncId = remote.syncId || remote.id || '';
-      if (localSyncId >= remoteSyncId) {
-        return { winner: local, reason: 'sync_id_tiebreak_local' };
+    if (!local.lastModified || !remote.lastModified || timeDiff < 1000) {
+      const localVersion = local.version || '';
+      const remoteVersion = remote.version || '';
+      if (localVersion >= remoteVersion) {
+        return { winner: local, reason: 'version_tiebreak_local' };
       }
-      return { winner: remote, reason: 'sync_id_tiebreak_remote' };
+      return { winner: remote, reason: 'version_tiebreak_remote' };
     }
 
-    // Clear winner: newer timestamp wins
+    // Clear winner: newer timestamp wins.
     if (localTime > remoteTime) {
       return { winner: local, reason: 'newer_local' };
     }
