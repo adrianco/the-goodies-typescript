@@ -9,7 +9,13 @@
  * Usage (via Claude Code mcpServers config):
  *   command: npx tsx
  *   args: [/path/to/src/mcp-server.ts]
- *   env: { FUNKYGIBBON_URL, FUNKYGIBBON_PASSWORD, SYNC_INTERVAL_SECONDS }
+ *   env: { FUNKYGIBBON_URL, FUNKYGIBBON_TOKEN or FUNKYGIBBON_PASSWORD, SYNC_INTERVAL_SECONDS }
+ *
+ * FUNKYGIBBON_TOKEN (a long-lived client token minted via
+ * `python -m funkygibbon.setup_auth --client-token-only`) takes precedence
+ * over FUNKYGIBBON_PASSWORD when both are set — prefer it when the server's
+ * admin password isn't known/stable (e.g. hash set directly in a launchd
+ * start script rather than .env).
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -22,6 +28,7 @@ import {
 import { KittenKongClient } from './client.js';
 
 const FUNKYGIBBON_URL = process.env.FUNKYGIBBON_URL ?? 'http://localhost:8000';
+const FUNKYGIBBON_TOKEN = process.env.FUNKYGIBBON_TOKEN ?? '';
 const FUNKYGIBBON_PASSWORD = process.env.FUNKYGIBBON_PASSWORD ?? 'admin';
 const SYNC_INTERVAL = Number(process.env.SYNC_INTERVAL_SECONDS ?? '60');
 
@@ -189,10 +196,16 @@ async function main(): Promise<void> {
   const client = new KittenKongClient({
     serverUrl: FUNKYGIBBON_URL,
     clientId: 'kittenkong-mcp-server',
+    authToken: FUNKYGIBBON_TOKEN || undefined,
   });
 
-  // Connect to FunkyGibbon and do an initial sync into local cache
-  await client.connect(FUNKYGIBBON_PASSWORD);
+  // Connect to FunkyGibbon and do an initial sync into local cache.
+  // A pre-set authToken (above) short-circuits the password login.
+  if (!FUNKYGIBBON_TOKEN) {
+    await client.connect(FUNKYGIBBON_PASSWORD);
+  } else {
+    await client.connect();
+  }
 
   // Keep local cache fresh with background sync
   await client.startBackgroundSync(SYNC_INTERVAL);
