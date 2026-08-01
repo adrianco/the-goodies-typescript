@@ -83,6 +83,15 @@ export interface SyncResponse {
    * sends it back as filters.since on the next delta sync (PROTOCOL.md §4).
    */
   server_time?: string;
+  /**
+   * Per-id acknowledgement of the changes this client pushed in the request
+   * (FunkyGibbon v0.3.0+). A client cannot safely drop a local change until
+   * the server confirms it by id: the server omits anything that lost conflict
+   * resolution or was skipped for a dangling endpoint, so absent ids must stay
+   * pending and retry. Optional because a pre-v0.3.0 server omits them.
+   */
+  applied?: string[];
+  applied_relationships?: string[];
 }
 
 export interface Change {
@@ -248,12 +257,30 @@ export class InbetweeniesProtocol {
   }
 
   /**
-   * Parse push result into applied IDs and conflicts
+   * Parse push result into applied IDs and conflicts.
+   *
+   * `applied` / `applied_relationships` are the server's per-id acknowledgement
+   * of what this client just pushed (FunkyGibbon v0.3.0+). They are the only
+   * safe basis for clearing a pending mark.
+   *
+   * Legacy fallback: a pre-v0.3.0 server omits `applied` entirely, so we fall
+   * back to inferring from `response.changes`. That inference is unsafe — it
+   * reads the server→client pull payload as if it were an ack, so an entity
+   * that LOST conflict resolution comes back as the server's winning version
+   * and looks "applied", silently dropping the local edit. It is retained only
+   * so an older server keeps converging rather than retrying forever. Presence
+   * of the field (even as an empty array) selects the correct path.
    */
-  parseSyncResult(response: SyncResponse): { appliedIds: string[]; conflicts: Conflict[] } {
-    const appliedIds = response.changes
-      .filter(sc => sc.entity)
-      .map(sc => sc.entity!.id);
+  parseSyncResult(response: SyncResponse): {
+    appliedIds: string[];
+    appliedRelationshipIds: string[];
+    conflicts: Conflict[];
+  } {
+    const appliedIds = response.applied !== undefined
+      ? response.applied
+      : response.changes.filter(sc => sc.entity).map(sc => sc.entity!.id);
+
+    const appliedRelationshipIds = response.applied_relationships ?? [];
 
     const conflicts: Conflict[] = response.conflicts.map(ci => ({
       entityId: ci.entity_id,
@@ -262,6 +289,6 @@ export class InbetweeniesProtocol {
       resolutionStrategy: ci.resolution_strategy,
     }));
 
-    return { appliedIds, conflicts };
+    return { appliedIds, appliedRelationshipIds, conflicts };
   }
 }
