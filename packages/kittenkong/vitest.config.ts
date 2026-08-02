@@ -7,6 +7,9 @@
  *
  * VERSION HISTORY:
  * - 2025-04-02: Initial configuration with TypeScript support and coverage
+ * - 2026-08-01: globalSetup starts an isolated FunkyGibbon on an ephemeral
+ *   port so integration tests never touch a real install or collide on 8000.
+ *   Timeouts raised because those tests do real HTTP round trips.
  *
  * DEPENDENCIES:
  * - vitest: Test runner and assertion library
@@ -20,6 +23,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    globalSetup: ['./tests/helpers/global-setup.ts'],
+    testTimeout: 30_000,
+    hookTimeout: 90_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

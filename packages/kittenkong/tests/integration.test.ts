@@ -32,6 +32,20 @@ import type { Entity, EntityType } from '@the-goodies/inbetweenies';
 const SERVER_URL = process.env.FUNKYGIBBON_URL || 'http://localhost:8000';
 const ADMIN_PASSWORD = process.env.FUNKYGIBBON_ADMIN_PASSWORD;
 
+// FunkyGibbon protects the sync/graph/mcp routers at registration
+// (`protected = [Depends(require_auth)]`), so every sync request needs a bearer
+// token. Supply one via FUNKYGIBBON_TOKEN; without it the sync tests skip
+// rather than assert 200 against a 401, which is what made them stale.
+const AUTH_TOKEN = process.env.FUNKYGIBBON_TOKEN;
+
+const syncHeaders = (): Record<string, string> => ({
+  'Content-Type': 'application/json',
+  ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
+});
+
+/** Sync assertions are only meaningful with credentials. */
+const syncTest = AUTH_TOKEN ? test : test.skip;
+
 describe('KittenKong Integration Tests', () => {
   describe('Server Connectivity', () => {
     test('should connect to FunkyGibbon health endpoint', async () => {
@@ -73,13 +87,13 @@ describe('KittenKong Integration Tests', () => {
       expect(response.status).toBe(404);
     });
 
-    test('should have sync endpoint defined and responding', async () => {
+    syncTest('should have sync endpoint defined and responding', async () => {
       // Given: The sync endpoint path and a valid sync request
 
       // When: We make a sync request
       const response = await fetch(`${SERVER_URL}/api/v1/sync/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: syncHeaders(),
         body: JSON.stringify({
           protocol_version: 'inbetweenies-v2',
           device_id: 'test-client',
@@ -272,13 +286,13 @@ describe('Client-Server Communication', () => {
   });
 
   describe('Sync Protocol', () => {
-    test('should successfully perform full sync request', async () => {
+    syncTest('should successfully perform full sync request', async () => {
       // Given: A client with sync request
 
       // When: We perform a full sync
       const response = await fetch(`${SERVER_URL}/api/v1/sync/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: syncHeaders(),
         body: JSON.stringify({
           protocol_version: 'inbetweenies-v2',
           device_id: client.clientId,
@@ -304,13 +318,13 @@ describe('Client-Server Communication', () => {
       console.log(`Received ${data.changes.length} entities from server`);
     });
 
-    test('should handle delta sync requests', async () => {
+    syncTest('should handle delta sync requests', async () => {
       // Given: A client with previous sync
 
       // When: We perform a delta sync
       const response = await fetch(`${SERVER_URL}/api/v1/sync/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: syncHeaders(),
         body: JSON.stringify({
           protocol_version: 'inbetweenies-v2',
           device_id: client.clientId,
