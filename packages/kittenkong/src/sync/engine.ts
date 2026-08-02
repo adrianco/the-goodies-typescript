@@ -7,7 +7,7 @@
 
 import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict } from '@the-goodies/inbetweenies';
 import type { AuthManager } from '../auth';
-import { InbetweeniesProtocol, type Change } from './protocol';
+import { InbetweeniesProtocol, type Change, type RelationshipChange } from './protocol';
 import { ConflictResolver } from './conflict-resolver';
 import { createVersion } from './version';
 import { LocalGraphOperations } from '../graph/local-operations';
@@ -18,10 +18,12 @@ export class SyncEngine {
   private protocol: InbetweeniesProtocol;
   private graphOps: LocalGraphOperations | null = null;
   private pendingSyncEntities: Set<string> = new Set();
+  private pendingSyncRelationships: Set<string> = new Set();
   private metadata: SyncMetadata;
   private observers: SyncObserver[] = [];
   private backgroundSyncTimer: ReturnType<typeof setInterval> | null = null;
   private consecutiveFailures: number = 0;
+  private readonly userId: string;
 
   constructor(
     serverUrl: string,
@@ -29,6 +31,7 @@ export class SyncEngine {
     clientId: string,
     userId: string = 'system'
   ) {
+    this.userId = userId;
     this.protocol = new InbetweeniesProtocol(serverUrl, authManager, clientId, userId);
     this.metadata = {
       clientId,
@@ -60,8 +63,25 @@ export class SyncEngine {
     this.pendingSyncEntities.add(entityId);
   }
 
+  /**
+   * Mark a relationship as needing sync to server.
+   *
+   * Edges ride on the change for their originating (from) entity, so the
+   * entity is marked too — the server applies entities before relationships
+   * (PROTOCOL.md §5) and the edge's FK needs its endpoint present.
+   */
+  markRelationshipForSync(relationshipId: string, fromEntityId?: string): void {
+    this.pendingSyncRelationships.add(relationshipId);
+    if (fromEntityId) this.pendingSyncEntities.add(fromEntityId);
+  }
+
+  /** Is this entity carrying an unpushed local edit? */
+  isPending(entityId: string): boolean {
+    return this.pendingSyncEntities.has(entityId);
+  }
+
   get pendingChangesCount(): number {
-    return this.pendingSyncEntities.size;
+    return this.pendingSyncEntities.size + this.pendingSyncRelationships.size;
   }
 
   getSyncStatus(): Record<string, any> {
@@ -131,17 +151,23 @@ export class SyncEngine {
 
       // Step 4: Push local changes
       let changesSent = 0;
-      if (this.pendingSyncEntities.size > 0 && this.graphOps) {
+      if ((this.pendingSyncEntities.size > 0 || this.pendingSyncRelationships.size > 0) && this.graphOps) {
         const localChanges = await this.getLocalChanges();
         if (localChanges.length > 0) {
           const pushResponse = await this.protocol.syncPush(localChanges);
-          const { appliedIds, conflicts: pushConflicts } =
+          const { appliedIds, appliedRelationshipIds, conflicts: pushConflicts } =
             this.protocol.parseSyncResult(pushResponse);
           changesSent = appliedIds.length;
 
           // Clear synced entities from pending
           for (const id of appliedIds) {
             this.pendingSyncEntities.delete(id);
+          }
+          // Same per-id rule for edges: only an acknowledged edge is dropped.
+          // Anything the server omitted (endpoint missing, lost resolution)
+          // stays pending and retries on the next sync.
+          for (const id of appliedRelationshipIds) {
+            this.pendingSyncRelationships.delete(id);
           }
 
           // Handle push conflicts
@@ -241,6 +267,24 @@ export class SyncEngine {
   private async getLocalChanges(): Promise<Change[]> {
     if (!this.graphOps) return [];
 
+    // Pending edges, grouped by the entity whose change they ride on.
+    const edgesByFrom = new Map<string, RelationshipChange[]>();
+    for (const relId of this.pendingSyncRelationships) {
+      const rel = await this.graphOps.getRelationshipById(relId);
+      if (!rel) continue;
+      const wire: RelationshipChange = {
+        id: rel.id,
+        from_entity_id: rel.fromEntityId,
+        to_entity_id: rel.toEntityId,
+        relationship_type: rel.relationshipType,
+        properties: rel.properties || {},
+        user_id: rel.userId || this.userId,
+      };
+      const bucket = edgesByFrom.get(rel.fromEntityId) || [];
+      bucket.push(wire);
+      edgesByFrom.set(rel.fromEntityId, bucket);
+    }
+
     const changes: Change[] = [];
     for (const entityId of this.pendingSyncEntities) {
       const entity = await this.graphOps.getEntity(entityId);
@@ -260,14 +304,45 @@ export class SyncEngine {
           timestamp: entity.lastModified instanceof Date
             ? entity.lastModified.toISOString()
             : String(entity.lastModified),
+          relationships: edgesByFrom.get(entityId) ?? [],
         });
+        edgesByFrom.delete(entityId);
       }
     }
+
+    // Edges whose `from` entity is already in sync ride on their own
+    // entity-less change — the server treats a change with no entity as
+    // relationships-only, which is exactly this case.
+    for (const [, edges] of edgesByFrom) {
+      changes.push({
+        entityId: '',
+        operation: 'update',
+        data: {},
+        relationships: edges,
+      });
+    }
+
     return changes;
   }
 
   private async applySingleChange(change: Change): Promise<boolean> {
     if (!this.graphOps || !change.data) return false;
+
+    // PULL-GUARD: never overwrite an entity carrying an unpushed local edit.
+    //
+    // Pull runs before push in a sync cycle. Without this check, a concurrent
+    // server change would replace the local edit in storage, the push would
+    // then read storage and send the SERVER's own version back, the server
+    // would idempotently ack it, and the pending mark would clear — destroying
+    // the local edit without the server ever seeing it and with no conflict
+    // recorded. Skipping here lets the push carry the local version with its
+    // original parentVersions, so the SERVER adjudicates (fast-forward or
+    // conflict resolution) as the protocol intends. The server's version is
+    // not lost: it is re-sent on the next delta once this id is no longer
+    // pending. Same defect as adrianco/the-goodies#69 in the Python client.
+    if (change.entityId && this.pendingSyncEntities.has(change.entityId)) {
+      return false;
+    }
 
     try {
       const entity: Entity = {

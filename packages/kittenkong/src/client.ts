@@ -262,7 +262,7 @@ export class KittenKongClient {
     properties?: Record<string, any>,
     userId?: string
   ): Promise<any> {
-    return this.graphOps.storeRelationship({
+    const stored = await this.graphOps.storeRelationship({
       id: '',
       fromEntityId,
       toEntityId,
@@ -271,6 +271,11 @@ export class KittenKongClient {
       userId: userId || 'system',
       createdAt: new Date(),
     });
+    // Queue the edge for push. Without this the relationship existed only
+    // locally: getLocalChanges built entity-only changes, so no edge ever
+    // reached the server and `applied_relationships` had nothing to ack.
+    this.syncEngine?.markRelationshipForSync(stored.id, stored.fromEntityId);
+    return stored;
   }
 
   /**

@@ -100,6 +100,14 @@ export interface Change {
   data: Record<string, any>;
   version?: string;
   timestamp?: string;
+  /**
+   * Relationships travelling with this entity change, in wire form. The
+   * protocol bundles edges onto the change for their originating entity, and
+   * the server applies them only after every entity in the batch has landed
+   * (PROTOCOL.md §5: entities before relationships) because the edge FK
+   * references its endpoints. Empty for an entity-only change.
+   */
+  relationships?: RelationshipChange[];
 }
 
 export interface Conflict {
@@ -188,7 +196,9 @@ export class InbetweeniesProtocol {
         user_id: change.data.userId || change.data.user_id || this.userId,
         parent_versions: change.data.parentVersions || [],
       } : null,
-      relationships: [],
+      // Was hardcoded [] — relationships created locally were silently never
+      // pushed, so `applied_relationships` always had nothing to acknowledge.
+      relationships: change.relationships ?? [],
     }));
 
     const request: SyncRequest = {

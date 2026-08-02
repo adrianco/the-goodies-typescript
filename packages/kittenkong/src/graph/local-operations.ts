@@ -159,6 +159,11 @@ export class LocalGraphOperations {
     return this.storage.getRelationships(fromId, toId, relType);
   }
 
+  /** Look up a single relationship by id (used by the sync push path). */
+  async getRelationshipById(relationshipId: string): Promise<EntityRelationship | null> {
+    return this.storage.getRelationships().find(r => r.id === relationshipId) || null;
+  }
+
   async searchEntities(
     query: string,
     entityTypes?: EntityType[],
