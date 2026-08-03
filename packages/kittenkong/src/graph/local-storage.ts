@@ -5,7 +5,8 @@
  * room-device relationships, and full-text search across the graph.
  */
 
-import type { Entity, EntityRelationship, EntityType, RelationshipType } from '@the-goodies/inbetweenies';
+import type { Entity, EntityRelationship, EntityType } from '@the-goodies/inbetweenies';
+import { RelationshipType } from '@the-goodies/inbetweenies';
 
 export interface SearchResult {
   entity: Entity;
@@ -285,7 +286,7 @@ export class LocalGraphStorage {
   }
 
   private updateRoomIndex(relationship: EntityRelationship): void {
-    if (relationship.relationshipType === 'LOCATED_IN') {
+    if (relationship.relationshipType === RelationshipType.LOCATED_IN) {
       const roomId = relationship.toEntityId;
       const deviceId = relationship.fromEntityId;
       if (!this.roomIndex.has(roomId)) {

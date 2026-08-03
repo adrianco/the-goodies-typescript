@@ -43,7 +43,7 @@ const TOOLS: Tool[] = [
         entity_types: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional filter by type: home, room, device, zone, door, window, procedure, manual, note, schedule, automation',
+          description: 'Optional filter by type: home, room, device, zone, door, window, procedure, manual, photo, note, schedule, automation, app',
         },
         limit: { type: 'number', description: 'Max results (default 10)' },
       },
@@ -189,6 +189,103 @@ const TOOLS: Tool[] = [
       },
       required: ['room_id'],
     },
+  },
+  // --- Attachments ------------------------------------------------------
+  // These exist because their absence was filled by invention: with no way to
+  // attach a photo, callers built an entity_type=note holding inline base64,
+  // linked by a has_blob edge that pointed at the note rather than the blob.
+  // That shape spread across two installs and took a migration to undo
+  // (ADR-013 §3). Served by the server, which owns the blob store.
+  {
+    name: 'attach_photo',
+    description:
+      'Attach a photo to an entity. Creates a photo entity carrying the image, ' +
+      'stores the bytes server-side, and links it with has_photo. Use this ' +
+      'rather than creating a note with inline data.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_entity_id: { type: 'string', description: 'The entity the photo is of' },
+        filename: { type: 'string', description: 'Original filename; becomes the photo name' },
+        data_b64: { type: 'string', description: 'Base64-encoded image bytes' },
+        mime_type: { type: 'string', description: 'e.g. image/jpeg (default)' },
+        description: { type: 'string', description: 'What the photo shows' },
+        user_id: { type: 'string', description: 'Who attached it' },
+      },
+      required: ['parent_entity_id', 'filename', 'data_b64'],
+    },
+  },
+  {
+    name: 'attach_document',
+    description:
+      'Attach a PDF or document to an entity. Creates a manual entity and links ' +
+      'it with documented_by. A PDF is a manual, not a photo.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_entity_id: { type: 'string', description: 'The entity the document describes' },
+        filename: { type: 'string', description: 'Original filename' },
+        data_b64: { type: 'string', description: 'Base64-encoded file bytes' },
+        mime_type: { type: 'string', description: 'e.g. application/pdf (default)' },
+        description: { type: 'string', description: 'What the document covers' },
+        user_id: { type: 'string', description: 'Who attached it' },
+      },
+      required: ['parent_entity_id', 'filename', 'data_b64'],
+    },
+  },
+  {
+    name: 'get_blob',
+    description:
+      'Fetch a stored blob by id. Metadata always; bytes only when include_data ' +
+      'is true, since blobs are large.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blob_id: { type: 'string', description: "From an attachment entity's content.blob_id" },
+        include_data: { type: 'boolean', description: 'Include base64 bytes. Default false.' },
+      },
+      required: ['blob_id'],
+    },
+  },
+  // --- History and retraction -------------------------------------------
+  // The store is append-only. There is deliberately no delete tool: the graph
+  // API has never had a DELETE endpoint, and removal is a tombstone version.
+  {
+    name: 'get_entity_versions',
+    description:
+      'Full version history of an entity, newest first. Entities are immutable: ' +
+      'every edit appends a version and nothing is overwritten.',
+    inputSchema: {
+      type: 'object',
+      properties: { entity_id: { type: 'string', description: 'The entity to get history for' } },
+      required: ['entity_id'],
+    },
+  },
+  {
+    name: 'tombstone_entity',
+    description:
+      'Retract an entity by appending a tombstone version. Use for something ' +
+      'that is gone, or to mark a record as an error. Nothing is deleted: ' +
+      'earlier versions stay readable and the reason is recorded. This is the ' +
+      'only way to remove something.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_id: { type: 'string', description: 'The entity to retract' },
+        reason: { type: 'string', description: 'Why -- recorded on the tombstone' },
+        is_error: {
+          type: 'boolean',
+          description: 'True if the record was wrong, as opposed to the thing no longer existing.',
+        },
+        user_id: { type: 'string', description: 'Who retracted it' },
+      },
+      required: ['entity_id', 'reason'],
+    },
+  },
+  {
+    name: 'get_statistics',
+    description: 'Counts of entities and relationships by type, for the whole graph.',
+    inputSchema: { type: 'object', properties: {} },
   },
 ];
 

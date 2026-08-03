@@ -7,6 +7,7 @@
 
 import type { AuthManager } from '../auth';
 import { createVersion, versionTimestamp } from './version';
+import { EntityType, SourceType } from '@the-goodies/inbetweenies';
 
 export interface SyncChange {
   change_type: 'create' | 'update' | 'delete';
@@ -135,6 +136,40 @@ export class InbetweeniesProtocol {
   }
 
   /**
+   * Call a tool on the server's MCP endpoint.
+   *
+   * Some tools cannot be served from the local cache: attaching a photo means
+   * getting bytes into the server's blob store, and the local replica has no
+   * blob store to put them in. Rather than invent a local one -- the exact
+   * habit that produced inline base64 in entity content (ADR-013 §3) -- these
+   * go straight to the authority, and the attachment arrives back on the next
+   * sync like any other entity.
+   */
+  async callServerTool(toolName: string, args: Record<string, any>): Promise<any> {
+    const response = await fetch(`${this.serverUrl}/api/v1/mcp/tools/${toolName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.authManager.getHeaders(),
+      },
+      body: JSON.stringify({ arguments: args }),
+      // Blob uploads are larger than a sync delta, so the 5s sync timeout is
+      // too tight; a few MB over a home LAN needs more room than that.
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`MCP tool ${toolName} failed: ${response.status} ${response.statusText}`);
+    }
+
+    const body = await response.json() as { success?: boolean; result?: any; error?: string };
+    if (body.error) {
+      throw new Error(body.error);
+    }
+    return body.result ?? body;
+  }
+
+  /**
    * Request changes from server (pull)
    */
   async syncRequest(lastSync: Date | null, entityTypes?: string[]): Promise<SyncResponse> {
@@ -189,10 +224,10 @@ export class InbetweeniesProtocol {
       entity: change.data ? {
         id: change.entityId,
         version: change.version || createVersion(change.data.userId || change.data.user_id || this.userId),
-        entity_type: change.data.entityType || change.data.entity_type || 'NOTE',
+        entity_type: change.data.entityType || change.data.entity_type || EntityType.NOTE,
         name: change.data.name || '',
         content: change.data.content || {},
-        source_type: change.data.sourceType || change.data.source_type || 'MANUAL',
+        source_type: change.data.sourceType || change.data.source_type || SourceType.MANUAL,
         user_id: change.data.userId || change.data.user_id || this.userId,
         parent_versions: change.data.parentVersions || [],
       } : null,
