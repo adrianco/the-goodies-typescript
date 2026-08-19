@@ -31,3 +31,13 @@ pnpm-debug.log*
 
 # Token files
 .kittenkong-token.json
+
+# Agent-framework working state (Instar, nanoclaw, OpenClaw).
+# These frameworks are optional for developing this client and are not required
+# to build, test or run it — nothing in src/ or packages/ imports them. Claude
+# Remote Control now covers the need Instar was adopted for. Their state is
+# local scratch, so it is ignored rather than committed; a checkout must not
+# imply a framework.
+.instar/
+.nanoclaw/
+.openclaw/
