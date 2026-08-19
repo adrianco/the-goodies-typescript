@@ -44,3 +44,4 @@ pnpm-debug.log*
 .swarm/
 .claude-flow/
 .agentic-qe/
+ruvector.db
