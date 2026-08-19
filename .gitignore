@@ -41,3 +41,6 @@ pnpm-debug.log*
 .instar/
 .nanoclaw/
 .openclaw/
+.swarm/
+.claude-flow/
+.agentic-qe/
