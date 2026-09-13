@@ -13,6 +13,8 @@
  * - SyncResult: Result of sync operations
  *
  * VERSION HISTORY:
+ * - 2026-09-13: inbetweenies-v3 -- EntityRelationship is an interval row
+ *   (validFrom/validTo, ADR-004); isCurrentAt/sameInstant helpers.
  * - 2025-04-02: Initial TypeScript port from Python inbetweenies/models.py
  *   - Complete enum definitions (EntityType, SourceType, RelationshipType, BlobType, BlobStatus)
  *   - All interface definitions matching Python dataclasses
@@ -127,7 +129,20 @@ export interface Entity {
   name?: string;  // Often in content, but commonly accessed
 }
 
-/** Entity relationship */
+/**
+ * Entity relationship -- an immutable INTERVAL row (inbetweenies-v3, ADR-004).
+ *
+ * `id` is the logical edge, stable across every interval of its life;
+ * `validFrom` picks the interval. An edge that changes is never updated in
+ * place: the open row is ended (`validTo` set) and a successor inserted, so
+ * "where was this device in March?" stays answerable after the move.
+ *
+ * Both bounds are on the VALID-time axis -- the client's edit time -- and are
+ * stored verbatim by the server. `validTo === null`/undefined means the edge is
+ * still true. Intervals are half-open, `[validFrom, validTo)`, so ending one
+ * row and starting its successor at the same instant yields exactly one
+ * current edge, never zero and never two.
+ */
 export interface EntityRelationship {
   id: string;
   fromEntityId: string;
@@ -136,6 +151,29 @@ export interface EntityRelationship {
   properties?: Record<string, any>;
   userId: string;
   createdAt: Date;
+  /** When this interval became true (client edit time). Defaults to createdAt. */
+  validFrom?: Date;
+  /** When it stopped being true; null/undefined while the edge is still true. */
+  validTo?: Date | null;
+}
+
+/**
+ * Is this interval true at `at` (default now)? Half-open by design; a missing
+ * `validFrom` reads as "has always been true" so a row constructed locally and
+ * not yet stamped is visible to the code that just created it.
+ */
+export function isCurrentAt(rel: EntityRelationship, at: Date = new Date()): boolean {
+  const t = at.getTime();
+  if (rel.validFrom && rel.validFrom.getTime() > t) return false;
+  if (rel.validTo && rel.validTo.getTime() <= t) return false;
+  return true;
+}
+
+/** Do two interval starts name the same row? Tolerates undefined on both sides. */
+export function sameInstant(a?: Date | null, b?: Date | null): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.getTime() === b.getTime();
 }
 
 /** Binary large object for files */

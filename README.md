@@ -50,7 +50,7 @@ await client.loginAdmin('password');
 
 // Create an entity
 const device = await client.createEntity({
-  entityType: 'DEVICE',
+  entityType: EntityType.DEVICE,   // wire vocabulary is lowercase: 'device'
   name: 'Smart Light',
   content: {
     manufacturer: 'Philips',

@@ -148,20 +148,45 @@ export class LocalGraphOperations {
     if (!relationship.createdAt) {
       relationship = { ...relationship, createdAt: new Date() };
     }
+    // ADR-004 §2: a local write is dated when it was made. validFrom is the
+    // as-of axis and travels to the server verbatim.
+    if (!relationship.validFrom) {
+      relationship = { ...relationship, validFrom: relationship.createdAt };
+    }
     return this.storage.storeRelationship(relationship);
+  }
+
+  /**
+   * End an edge (ADR-004 §1): the interval closes, the row stays. This is the
+   * client's delete/move primitive; the sync push carries it as an end-event.
+   */
+  async endRelationship(relationshipId: string, at: Date = new Date()): Promise<EntityRelationship | null> {
+    return this.storage.endRelationship(relationshipId, at);
   }
 
   async getRelationships(
     fromId?: string,
     toId?: string,
-    relType?: RelationshipType
+    relType?: RelationshipType,
+    includeAllVersions = false
   ): Promise<EntityRelationship[]> {
-    return this.storage.getRelationships(fromId, toId, relType);
+    return this.storage.getRelationships(fromId, toId, relType, { includeAllVersions });
   }
 
-  /** Look up a single relationship by id (used by the sync push path). */
+  /**
+   * Look up the NEWEST interval of one edge, current or not -- for the sync
+   * push path, which is the one caller that must see a retired interval: an
+   * edge the user just ended is pending precisely because it ended, and a
+   * current-only lookup would find nothing and drop the change forever.
+   */
   async getRelationshipById(relationshipId: string): Promise<EntityRelationship | null> {
-    return this.storage.getRelationships().find(r => r.id === relationshipId) || null;
+    const rows = this.storage
+      .getRelationships(undefined, undefined, undefined, { includeAllVersions: true })
+      .filter(r => r.id === relationshipId);
+    if (rows.length === 0) return null;
+    return rows.reduce((newest, r) =>
+      (r.validFrom?.getTime() ?? 0) > (newest.validFrom?.getTime() ?? 0) ? r : newest
+    );
   }
 
   async searchEntities(

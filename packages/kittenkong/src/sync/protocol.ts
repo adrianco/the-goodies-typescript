@@ -1,9 +1,21 @@
 /**
  * Inbetweenies Wire Protocol - Communication with FunkyGibbon Server
  *
- * Implements the inbetweenies-v2 sync protocol for bidirectional
+ * Implements the inbetweenies-v3 sync protocol for bidirectional
  * entity synchronization between client and server.
+ *
+ * v3 (the-goodies v0.5.0, ADR-004/ADR-005): a v2 request is rejected with 400
+ * -- there is no compatibility window. What changed on the wire:
+ *   - RelationshipChange carries valid_from / valid_to. An edge is an
+ *     immutable interval; ending one (valid_to set) is how a client deletes or
+ *     moves it, as an ordinary change with no special message type.
+ *   - The pull carries edge interval rows too, retired ones included, and an
+ *     entity-less SyncChange may carry only edges (PROTOCOL.md §3.1).
+ *   - vector_clock is gone. It was never read by anything.
  */
+
+/** The only protocol version the server accepts. A mismatch is HTTP 400. */
+export const PROTOCOL_VERSION = 'inbetweenies-v3';
 
 import type { AuthManager } from '../auth';
 import { createVersion, versionTimestamp } from './version';
@@ -34,10 +46,16 @@ export interface RelationshipChange {
   relationship_type: string;
   properties?: Record<string, any>;
   user_id: string;
-}
-
-export interface VectorClock {
-  clocks: Record<string, string>;
+  /**
+   * Interval bounds, UTC ISO-8601 (PROTOCOL.md §3). SEND valid_from: omitting
+   * it makes the server stamp its own clock, which puts the edit on the
+   * replication axis instead of the query axis and dates all history by the
+   * sync lag. A set valid_to is an END EVENT -- the only way to delete or move
+   * an edge; without it the change is indistinguishable from an unchanged
+   * re-push and is discarded as idempotent.
+   */
+  valid_from?: string | null;
+  valid_to?: string | null;
 }
 
 export interface SyncFilters {
@@ -50,7 +68,6 @@ export interface SyncRequest {
   device_id: string;
   user_id: string;
   sync_type: 'full' | 'delta';
-  vector_clock: VectorClock;
   changes: SyncChange[];
   cursor?: string;
   filters?: SyncFilters;
@@ -76,7 +93,6 @@ export interface SyncResponse {
   sync_type: string;
   changes: SyncChange[];
   conflicts: ConflictInfo[];
-  vector_clock: VectorClock;
   cursor?: string;
   sync_stats: SyncStats;
   /**
@@ -125,14 +141,12 @@ export class InbetweeniesProtocol {
   private authManager: AuthManager;
   private deviceId: string;
   private userId: string;
-  private vectorClock: VectorClock;
 
   constructor(serverUrl: string, authManager: AuthManager, deviceId: string, userId: string = 'system') {
     this.serverUrl = serverUrl.replace(/\/$/, '');
     this.authManager = authManager;
     this.deviceId = deviceId;
     this.userId = userId;
-    this.vectorClock = { clocks: {} };
   }
 
   /**
@@ -182,11 +196,10 @@ export class InbetweeniesProtocol {
       : undefined;
 
     const request: SyncRequest = {
-      protocol_version: 'inbetweenies-v2',
+      protocol_version: PROTOCOL_VERSION,
       device_id: this.deviceId,
       user_id: this.userId,
       sync_type: syncType,
-      vector_clock: this.vectorClock,
       changes: [],
       filters,
     };
@@ -205,14 +218,7 @@ export class InbetweeniesProtocol {
       throw new Error(`Sync request failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as SyncResponse;
-
-    // Update vector clock from server
-    if (data.vector_clock) {
-      this.vectorClock = data.vector_clock;
-    }
-
-    return data;
+    return await response.json() as SyncResponse;
   }
 
   /**
@@ -237,11 +243,10 @@ export class InbetweeniesProtocol {
     }));
 
     const request: SyncRequest = {
-      protocol_version: 'inbetweenies-v2',
+      protocol_version: PROTOCOL_VERSION,
       device_id: this.deviceId,
       user_id: this.userId,
       sync_type: 'delta',
-      vector_clock: this.vectorClock,
       changes: syncChanges,
     };
 
@@ -259,13 +264,7 @@ export class InbetweeniesProtocol {
       throw new Error(`Sync push failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as SyncResponse;
-
-    if (data.vector_clock) {
-      this.vectorClock = data.vector_clock;
-    }
-
-    return data;
+    return await response.json() as SyncResponse;
   }
 
   /**
@@ -289,6 +288,11 @@ export class InbetweeniesProtocol {
       // Derive the modification time from the version (the wire EntityChange has
       // no updated_at; the version encodes the UTC edit time), NOT the local clock.
       timestamp: (versionTimestamp(sc.entity?.version) ?? new Date()).toISOString(),
+      // v3: edges arrive on the pull as well as the push. They used to be
+      // dropped here -- the server never sent any, so it cost nothing and was
+      // invisible. A change with no entity is an edge-only change whose source
+      // entity was synced earlier (PROTOCOL.md §3.1); it must not be discarded.
+      relationships: sc.relationships ?? [],
     }));
 
     const conflicts: Conflict[] = response.conflicts.map(ci => ({

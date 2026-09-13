@@ -15,14 +15,13 @@ export { AuthManager, type AuthManagerOptions } from './auth';
 
 // Sync
 export { SyncEngine, type SyncObserver } from './sync/engine';
-export { InbetweeniesProtocol } from './sync/protocol';
+export { InbetweeniesProtocol, PROTOCOL_VERSION } from './sync/protocol';
 export type {
   SyncRequest,
   SyncResponse,
   SyncChange,
   EntityChange,
   RelationshipChange,
-  VectorClock,
   SyncFilters,
   ConflictInfo,
   SyncStats,

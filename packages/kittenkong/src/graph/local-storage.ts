@@ -6,7 +6,15 @@
  */
 
 import type { Entity, EntityRelationship, EntityType } from '@the-goodies/inbetweenies';
-import { RelationshipType } from '@the-goodies/inbetweenies';
+import { RelationshipType, isCurrentAt, sameInstant } from '@the-goodies/inbetweenies';
+
+/** Read options for interval-aware relationship queries (ADR-004). */
+export interface RelationshipQuery {
+  /** Return retired intervals too -- history, not state. The sync push path needs this. */
+  includeAllVersions?: boolean;
+  /** The instant to answer for; omitted = now. */
+  at?: Date;
+}
 
 export interface SearchResult {
   entity: Entity;
@@ -91,30 +99,96 @@ export class LocalGraphStorage {
   }
 
   /**
-   * Store a relationship
+   * Store a relationship interval -- end-and-insert, never mutate (ADR-004 §1).
+   *
+   * `id` is the logical edge; `(id, validFrom)` is the row. This used to
+   * "avoid duplicates" by id, which silently dropped every successive interval
+   * of an edge: a device moved from the kitchen to the hall kept its kitchen
+   * row forever and never gained the hall one. Now:
+   *   - the same (id, validFrom) row re-delivered is idempotent; only its end
+   *     can move (an end-event for a row we hold);
+   *   - a new open interval for an id with an open row ends the predecessor at
+   *     the successor's start, so the half-open intervals tile without gap or
+   *     overlap;
+   *   - a closed interval for an unknown row is stored as history.
    */
   storeRelationship(relationship: EntityRelationship): EntityRelationship {
-    // Avoid duplicates
-    const exists = this.relationships.find(r => r.id === relationship.id);
-    if (!exists) {
-      this.relationships.push(relationship);
-      this.updateRoomIndex(relationship);
+    const incoming: EntityRelationship = {
+      ...relationship,
+      validFrom: relationship.validFrom ?? relationship.createdAt ?? new Date(),
+      validTo: relationship.validTo ?? null,
+    };
+
+    const sameRow = this.relationships.find(
+      r => r.id === incoming.id && sameInstant(r.validFrom, incoming.validFrom)
+    );
+    if (sameRow) {
+      if (!sameRow.validTo && incoming.validTo) sameRow.validTo = incoming.validTo;
+      this.rebuildRoomIndex();
+      return sameRow;
     }
-    return relationship;
+
+    const openRow = this.relationships.find(r => r.id === incoming.id && !r.validTo);
+    if (openRow && !incoming.validTo) {
+      if (this.sameContent(openRow, incoming)) {
+        // Unchanged re-push: writing nothing keeps one continuous fact from
+        // being shredded into adjacent slivers.
+        return openRow;
+      }
+      openRow.validTo = incoming.validFrom!;
+    } else if (openRow && incoming.validTo) {
+      // An end-event naming a start we do not hold: end our open row at the
+      // requested instant rather than adding a second, overlapping row.
+      openRow.validTo = incoming.validTo;
+      this.rebuildRoomIndex();
+      return openRow;
+    }
+
+    this.relationships.push(incoming);
+    this.rebuildRoomIndex();
+    return incoming;
   }
 
   /**
-   * Get relationships with optional filters
+   * End an edge's open interval at `at` (default now). Ending is not deleting:
+   * the row stays, and every question about the period it covered still
+   * answers correctly. Returns the ended row, or null if there was no open one.
+   */
+  endRelationship(relationshipId: string, at: Date = new Date()): EntityRelationship | null {
+    const openRow = this.relationships.find(r => r.id === relationshipId && !r.validTo);
+    if (!openRow) return null;
+    const start = openRow.validFrom?.getTime() ?? 0;
+    openRow.validTo = at.getTime() < start ? new Date(start) : at;
+    this.rebuildRoomIndex();
+    return openRow;
+  }
+
+  private sameContent(a: EntityRelationship, b: EntityRelationship): boolean {
+    return (
+      a.fromEntityId === b.fromEntityId &&
+      a.toEntityId === b.toEntityId &&
+      a.relationshipType === b.relationshipType &&
+      JSON.stringify(a.properties ?? {}) === JSON.stringify(b.properties ?? {})
+    );
+  }
+
+  /**
+   * Get relationships with optional filters. Current-only by default: a
+   * retired interval is history, never state, and returning both leaves a
+   * moved device in two rooms at once.
    */
   getRelationships(
     fromId?: string,
     toId?: string,
-    relType?: RelationshipType
+    relType?: RelationshipType,
+    query: RelationshipQuery = {}
   ): EntityRelationship[] {
+    const at = query.at ?? new Date();
     return this.relationships.filter(r => {
       if (fromId && r.fromEntityId !== fromId) return false;
       if (toId && r.toEntityId !== toId) return false;
       if (relType && r.relationshipType !== relType) return false;
+      if (!query.includeAllVersions && !isCurrentAt(r, at)) return false;
       return true;
     });
   }
@@ -189,15 +263,10 @@ export class LocalGraphStorage {
       this.storeEntity(entity);
     }
 
-    // Update relationships
+    // Update relationships -- through the interval-aware store, so a pulled
+    // successor ends its predecessor instead of overwriting it.
     for (const rel of relationships) {
-      const existingIdx = this.relationships.findIndex(r => r.id === rel.id);
-      if (existingIdx >= 0) {
-        this.relationships[existingIdx] = rel;
-      } else {
-        this.relationships.push(rel);
-      }
-      this.updateRoomIndex(rel);
+      this.storeRelationship(rel);
     }
   }
 
@@ -210,20 +279,22 @@ export class LocalGraphStorage {
       entityCountByType[type] = ids.size;
     }
 
+    // Statistics describe the CURRENT graph; retired intervals are history.
+    const current = this.getRelationships();
     const relationshipCountByType: Record<string, number> = {};
-    for (const rel of this.relationships) {
+    for (const rel of current) {
       const type = rel.relationshipType;
       relationshipCountByType[type] = (relationshipCountByType[type] || 0) + 1;
     }
 
     // Calculate average degree
     const entityCount = this.entities.size;
-    const totalDegree = this.relationships.length * 2; // each rel connects 2 nodes
+    const totalDegree = current.length * 2; // each rel connects 2 nodes
     const avgDegree = entityCount > 0 ? totalDegree / entityCount : 0;
 
     // Find isolated entities (no relationships)
     const connectedIds = new Set<string>();
-    for (const rel of this.relationships) {
+    for (const rel of current) {
       connectedIds.add(rel.fromEntityId);
       connectedIds.add(rel.toEntityId);
     }
@@ -231,7 +302,7 @@ export class LocalGraphStorage {
 
     return {
       totalEntities: entityCount,
-      totalRelationships: this.relationships.length,
+      totalRelationships: current.length,
       entityCountByType,
       relationshipCountByType,
       averageDegree: Math.round(avgDegree * 100) / 100,
@@ -285,14 +356,18 @@ export class LocalGraphStorage {
     this.typeIndex.get(type)!.add(entity.id);
   }
 
-  private updateRoomIndex(relationship: EntityRelationship): void {
-    if (relationship.relationshipType === RelationshipType.LOCATED_IN) {
-      const roomId = relationship.toEntityId;
-      const deviceId = relationship.fromEntityId;
-      if (!this.roomIndex.has(roomId)) {
-        this.roomIndex.set(roomId, new Set());
-      }
-      this.roomIndex.get(roomId)!.add(deviceId);
+  /**
+   * Rebuild the room index from CURRENT located_in edges only.
+   *
+   * It was append-only with no removal path, so a device that moved rooms
+   * stayed listed in its old room permanently. Recomputing from the interval
+   * rows is O(edges) on a house-scale graph and cannot drift.
+   */
+  private rebuildRoomIndex(): void {
+    this.roomIndex.clear();
+    for (const rel of this.getRelationships(undefined, undefined, RelationshipType.LOCATED_IN)) {
+      if (!this.roomIndex.has(rel.toEntityId)) this.roomIndex.set(rel.toEntityId, new Set());
+      this.roomIndex.get(rel.toEntityId)!.add(rel.fromEntityId);
     }
   }
 }

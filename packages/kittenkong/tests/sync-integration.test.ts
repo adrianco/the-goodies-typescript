@@ -2,7 +2,7 @@
  * Sync integration tests against an isolated FunkyGibbon server.
  *
  * PURPOSE:
- * Exercise the real Inbetweenies v2 wire contract end to end — auth, pull,
+ * Exercise the real Inbetweenies v3 wire contract end to end — auth, pull,
  * push, and the per-id acknowledgement introduced in FunkyGibbon v0.3.0 —
  * against a server this suite started itself on an ephemeral port with a
  * seeded throwaway database (see tests/helpers/funkygibbon-server.ts).
@@ -20,6 +20,8 @@
  * funkygibbon available). It never silently passes.
  *
  * VERSION HISTORY:
+ * - 2026-09-13: inbetweenies-v3 (the-goodies v0.5.0): v2 is rejected, edges
+ *   are intervals and travel both ways.
  * - 2026-08-01: Initial suite — contract, auth, pull, push acks, conflicts.
  */
 
@@ -57,11 +59,10 @@ const post = (s: ServerHandle, path: string, body: unknown, token?: string | nul
   });
 
 const syncBody = (over: Record<string, unknown> = {}) => ({
-  protocol_version: 'inbetweenies-v2',
+  protocol_version: 'inbetweenies-v3',
   device_id: 'kittenkong-test',
   user_id: 'admin',
   sync_type: 'delta',
-  vector_clock: {},
   changes: [],
   ...over,
 });
@@ -124,7 +125,15 @@ describe('Authentication', () => {
   );
 });
 
-describe('Inbetweenies v2 response contract', () => {
+describe('Inbetweenies v3 response contract', () => {
+  test(
+    'a v2 request is rejected with 400 — there is no compatibility window',
+    guard(async s => {
+      const res = await post(s, '/api/v1/sync/', syncBody({ protocol_version: 'inbetweenies-v2' }));
+      expect(res.status).toBe(400);
+    })
+  );
+
   test(
     'delta sync returns the documented envelope',
     guard(async s => {
@@ -132,7 +141,7 @@ describe('Inbetweenies v2 response contract', () => {
       expect(res.status).toBe(200);
 
       const data = await res.json();
-      expect(data.protocol_version).toBe('inbetweenies-v2');
+      expect(data.protocol_version).toBe('inbetweenies-v3');
       expect(data.sync_type).toBe('delta');
       expect(Array.isArray(data.changes)).toBe(true);
       expect(Array.isArray(data.conflicts)).toBe(true);
@@ -234,6 +243,69 @@ describe('Push acknowledgement', () => {
       });
       expect(res.status).toBe(200);
       expect((await res.json()).entity.id).toBe(id);
+    })
+  );
+});
+
+
+describe('Edge intervals over the wire (ADR-004, PROTOCOL.md §3)', () => {
+  const march = '2026-03-01T14:00:00.000000+00:00';
+  const june = '2026-06-01T14:00:00.000000+00:00';
+
+  const mk = (id: string, name: string, entity_type: string) => ({
+    change_type: 'create',
+    entity: {
+      id, version: `${new Date().toISOString().replace('Z', '000+00:00')}-kk`,
+      entity_type, name, content: {}, source_type: 'manual', user_id: 'admin', parent_versions: [],
+    },
+  });
+  const edge = (over: Record<string, unknown>) => ({
+    change_type: 'update', entity: null,
+    relationships: [{ relationship_type: 'located_in', properties: {}, user_id: 'admin', ...over }],
+  });
+  const pulledEdges = async (s: ServerHandle, id: string) => {
+    const data = await (await post(s, '/api/v1/sync/', syncBody({ sync_type: 'full' }))).json();
+    return (data.changes as any[]).flatMap(c => c.relationships ?? []).filter((r: any) => r.id === id);
+  };
+
+  test(
+    'a move produces two tiling intervals under one edge id, both served on the pull',
+    guard(async s => {
+      const stamp = Date.now();
+      const lamp = `kk-lamp-${stamp}`, kitchen = `kk-kitchen-${stamp}`, hall = `kk-hall-${stamp}`, rel = `kk-rel-${stamp}`;
+      let res = await post(s, '/api/v1/sync/', syncBody({ changes: [mk(lamp, 'Lamp', 'device'), mk(kitchen, 'Kitchen', 'room'), mk(hall, 'Hall', 'room')] }));
+      expect(res.status).toBe(200);
+
+      res = await post(s, '/api/v1/sync/', syncBody({ changes: [edge({ id: rel, from_entity_id: lamp, to_entity_id: kitchen, valid_from: march })] }));
+      expect((await res.json()).applied_relationships).toContain(rel);
+      res = await post(s, '/api/v1/sync/', syncBody({ changes: [edge({ id: rel, from_entity_id: lamp, to_entity_id: hall, valid_from: june })] }));
+      expect((await res.json()).applied_relationships).toContain(rel);
+
+      const rows = await pulledEdges(s, rel);
+      expect(rows, 'history was projected away on the wire').toHaveLength(2);
+      const retired = rows.find((r: any) => r.to_entity_id === kitchen);
+      const live = rows.find((r: any) => r.to_entity_id === hall);
+      expect(retired.valid_to, 'the superseded row must be closed').not.toBeNull();
+      expect(live.valid_to).toBeNull();
+      // Half-open handover: the predecessor ends exactly where the successor starts.
+      expect(new Date(retired.valid_to).getTime()).toBe(new Date(live.valid_from).getTime());
+      expect(new Date(live.valid_from).getTime()).toBe(new Date(june).getTime());
+    })
+  );
+
+  test(
+    'a client-supplied valid_to ends the edge — that is how a delete travels',
+    guard(async s => {
+      const stamp = Date.now();
+      const lamp = `kk-lamp2-${stamp}`, kitchen = `kk-kitchen2-${stamp}`, rel = `kk-rel2-${stamp}`;
+      await post(s, '/api/v1/sync/', syncBody({ changes: [mk(lamp, 'Lamp', 'device'), mk(kitchen, 'Kitchen', 'room')] }));
+      await post(s, '/api/v1/sync/', syncBody({ changes: [edge({ id: rel, from_entity_id: lamp, to_entity_id: kitchen, valid_from: march })] }));
+      const res = await post(s, '/api/v1/sync/', syncBody({ changes: [edge({ id: rel, from_entity_id: lamp, to_entity_id: kitchen, valid_from: march, valid_to: june })] }));
+      expect((await res.json()).applied_relationships).toContain(rel);
+
+      const rows = await pulledEdges(s, rel);
+      expect(rows, 'an end-event must close a row, not open one').toHaveLength(1);
+      expect(rows[0].valid_to).not.toBeNull();
     })
   );
 });

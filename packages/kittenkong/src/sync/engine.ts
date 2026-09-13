@@ -5,7 +5,7 @@
  * manages pending changes, background sync, and conflict resolution.
  */
 
-import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict } from '@the-goodies/inbetweenies';
+import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict, RelationshipType } from '@the-goodies/inbetweenies';
 import { EntityType, SourceType } from '@the-goodies/inbetweenies';
 import type { AuthManager } from '../auth';
 import { InbetweeniesProtocol, type Change, type RelationshipChange } from './protocol';
@@ -286,6 +286,12 @@ export class SyncEngine {
         relationship_type: rel.relationshipType,
         properties: rel.properties || {},
         user_id: rel.userId || this.userId,
+        // ADR-004 §2/§6: the interval IS the payload. valid_from is this
+        // client's edit time -- the as-of axis -- and a set valid_to is how an
+        // edge is ended (deleted or moved). Omit them and the server stamps
+        // its own clock and cannot tell an end-event from an unchanged re-push.
+        valid_from: (rel.validFrom ?? rel.createdAt ?? new Date()).toISOString(),
+        valid_to: rel.validTo ? rel.validTo.toISOString() : null,
       };
       const bucket = edgesByFrom.get(rel.fromEntityId) || [];
       bucket.push(wire);
@@ -334,6 +340,57 @@ export class SyncEngine {
 
   private async applySingleChange(change: Change): Promise<boolean> {
     if (!this.graphOps || !change.data) return false;
+
+    let applied = false;
+    if (change.entityId) {
+      applied = await this.applyPulledEntity(change);
+    }
+    // v3: edges ride on the change (PROTOCOL.md §3.1/§5 -- entities before
+    // relationships, which is why they are applied after the entity above).
+    // A change with no entityId carries only edges and must still apply.
+    const edgesApplied = await this.applyPulledRelationships(change);
+    return applied || edgesApplied;
+  }
+
+  /**
+   * Store the edge intervals riding on a pulled change (ADR-005 §3).
+   *
+   * A pending local edit for the same edge id wins, exactly as it does for
+   * entities: an edge the user just ended offline is pending precisely
+   * because it changed, and the server's older interval must not overwrite
+   * it before the push has been adjudicated.
+   */
+  private async applyPulledRelationships(change: Change): Promise<boolean> {
+    if (!this.graphOps || !change.relationships?.length) return false;
+    let applied = false;
+    for (const wire of change.relationships) {
+      if (this.pendingSyncRelationships.has(wire.id)) continue;
+      const validFrom = wire.valid_from ? new Date(wire.valid_from) : new Date();
+      const rel: EntityRelationship = {
+        id: wire.id,
+        fromEntityId: wire.from_entity_id,
+        toEntityId: wire.to_entity_id,
+        relationshipType: wire.relationship_type as RelationshipType,
+        properties: wire.properties || {},
+        userId: wire.user_id || 'system',
+        createdAt: validFrom,
+        validFrom,
+        validTo: wire.valid_to ? new Date(wire.valid_to) : null,
+      };
+      try {
+        // storeRelationship is the plain store, not a local write: it does not
+        // mark the edge pending, so the server's own row is never pushed back.
+        await this.graphOps.storeRelationship(rel);
+        applied = true;
+      } catch {
+        // one bad edge must not abort the batch
+      }
+    }
+    return applied;
+  }
+
+  private async applyPulledEntity(change: Change): Promise<boolean> {
+    if (!this.graphOps) return false;
 
     // PULL-GUARD: never overwrite an entity carrying an unpushed local edit.
     //
