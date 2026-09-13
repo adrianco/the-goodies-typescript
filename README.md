@@ -21,11 +21,11 @@ Provides:
 TypeScript client package based on Python [blowing-off](https://github.com/adrianco/the-goodies/tree/main/blowing-off) that depends on inbetweenies to communicate with the Python-based [funkygibbon](https://github.com/adrianco/the-goodies/tree/main/funkygibbon) server.
 
 Provides:
-- REST API client for FunkyGibbon
+- MCP client for FunkyGibbon — every read and write is a tool (the-goodies ADR-015)
 - In-memory local graph cache (see [Sync behaviour](#sync-behaviour))
-- Sync engine (Inbetweenies v2, per-id acknowledgement)
+- Sync engine (Inbetweenies v3: interval edges, per-id acknowledgement)
 - Authentication management
-- MCP tool execution (12 tools, served over stdio)
+- MCP tool execution (22 tools, served over stdio — the same catalog FunkyGibbon serves)
 
 ## Installation
 
@@ -133,7 +133,7 @@ later delta once the id is no longer pending.
   restart are lost. A persistent store is part of the design work below.
 - **Conflict resolution is server-side only.** The client applies the winner and
   reports conflicts informationally; it never resolves locally.
-- Tracked in [#3](https://github.com/rolandcanyon-cmd/the-goodies-typescript/issues/3).
+- Originally tracked as rolandcanyon-cmd/the-goodies-typescript#3 (the repository this one was forked from).
   The redesign that addresses persistence — clients as full temporal replicas
   with as-of queries — is under review as ADRs in
   [adrianco/the-goodies#70](https://github.com/adrianco/the-goodies/pull/70).

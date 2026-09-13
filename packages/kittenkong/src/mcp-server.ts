@@ -2,7 +2,7 @@
 /**
  * KittenKong MCP Server
  *
- * Stdio MCP server that exposes all 22 knowledge graph tools via the
+ * Stdio MCP server that exposes all 23 knowledge graph tools via the
  * KittenKongClient. Data is synced from FunkyGibbon into local memory on
  * startup, then kept fresh via background sync.
  *
@@ -341,6 +341,19 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'list_entities',
+    description: 'List entities, optionally by type, paged. Current by default; with `at`, the entities that existed then.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', description: 'Optional filter, e.g. room' },
+        limit: { type: 'number', description: 'Page size, default 100' },
+        offset: { type: 'number', description: 'Page start, default 0' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
+      },
+    },
+  },
+  {
     name: 'get_graph_diff',
     description: 'What changed between two instants: entities that gained a version, edges that started, edges that ended.',
     inputSchema: {
@@ -373,7 +386,7 @@ async function main(): Promise<void> {
   await client.startBackgroundSync(SYNC_INTERVAL);
 
   const server = new Server(
-    { name: 'kittenkong', version: '0.6.0' },
+    { name: 'kittenkong', version: '0.7.0' },
     { capabilities: { tools: {} } },
   );
 

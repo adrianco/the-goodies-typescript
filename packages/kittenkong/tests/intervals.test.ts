@@ -252,3 +252,21 @@ describe('MCP writes reach the server: the client marks them pending', () => {
     expect((client as any).syncEngine.pendingChangesCount).toBe(3); // same edge, still one mark
   });
 });
+
+describe('list_entities: the last read that was REST-only (ADR-015)', () => {
+  test('lists by type, paged, and as of an instant', async () => {
+    const ctx = makeEngine();
+    const stamp = (n: number) => `${MARCH.toISOString().replace('Z', '000+00:00')}-00000${n}-t`;
+    await ctx.ops.storeEntity({ ...entity('lamp'), version: stamp(1) });
+    await ctx.ops.storeEntity({ ...entity('kitchen', EntityType.ROOM), version: stamp(2) });
+    await ctx.ops.storeEntity({ ...entity('hall', EntityType.ROOM), version: `${JULY.toISOString().replace('Z', '000+00:00')}-000003-t` });
+
+    const rooms = await ctx.ops.executeTool('list_entities', { entity_type: 'room' });
+    expect(rooms.result.entities.map((e: any) => e.id).sort()).toEqual(['hall', 'kitchen']);
+    const page = await ctx.ops.executeTool('list_entities', { limit: 1, offset: 1 });
+    expect(page.result.count).toBe(1);
+    expect(page.result.total).toBe(3);
+    const april = await ctx.ops.executeTool('list_entities', { entity_type: 'room', at: APRIL.toISOString() });
+    expect(april.result.entities.map((e: any) => e.id)).toEqual(['kitchen']);
+  });
+});

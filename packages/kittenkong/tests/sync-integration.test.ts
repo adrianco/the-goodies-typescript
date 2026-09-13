@@ -83,11 +83,9 @@ describe('Isolated harness', () => {
   test(
     'database is seeded — an empty graph would make every assertion vacuous',
     guard(async s => {
-      const res = await fetch(`${s.baseUrl}/api/v1/graph/statistics`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
+      const res = await post(s, '/api/v1/mcp/tools/get_statistics', { arguments: {} });
       expect(res.status).toBe(200);
-      expect((await res.json()).total_entities).toBeGreaterThan(0);
+      expect((await res.json()).result.total_entities).toBeGreaterThan(0);
     })
   );
 });
@@ -238,11 +236,9 @@ describe('Push acknowledgement', () => {
       const id = `kk-test-${Date.now()}-persist`;
       await post(s, '/api/v1/sync/', syncBody({ changes: [pushEntity(id, 'KittenKong persistence')] }));
 
-      const res = await fetch(`${s.baseUrl}/api/v1/graph/entities/${id}`, {
-        headers: { Authorization: `Bearer ${s.token}` },
-      });
+      const res = await post(s, '/api/v1/mcp/tools/get_entity_details', { arguments: { entity_id: id } });
       expect(res.status).toBe(200);
-      expect((await res.json()).entity.id).toBe(id);
+      expect((await res.json()).result.entity.id).toBe(id);
     })
   );
 });

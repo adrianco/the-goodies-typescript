@@ -40,6 +40,7 @@ const MCP_TOOLS = [
   'get_connected',
   'end_relationship',
   'get_graph_diff',
+  'list_entities',
 ] as const;
 
 export type MCPToolName = typeof MCP_TOOLS[number];
@@ -126,6 +127,10 @@ export class LocalGraphOperations {
         );
       case 'get_graph_diff':
         return this.getGraphDiffTool(args.since, args.until);
+      case 'list_entities':
+        return this.listEntitiesTool(
+          args.entity_type || args.entityType, args.limit ?? 100, args.offset ?? 0, this.at(args)
+        );
       case 'update_entity':
         return this.updateEntityTool(
           args.entity_id || args.entityId,
@@ -762,6 +767,24 @@ export class LocalGraphOperations {
         ended_at: ended.validTo ? ended.validTo.toISOString() : null,
         reason: reason ?? null, user_id: userId ?? null,
         relationship: this.relDict(ended),
+      },
+    };
+  }
+
+  /** Enumerate entities, optionally by type, paged, as of `at` (the last read that was REST-only). */
+  private async listEntitiesTool(entityType?: string, limit = 100, offset = 0, at?: Date): Promise<ToolResult> {
+    let all = this.storage.getAllEntities(!!at);
+    if (entityType) all = all.filter(e => e.entityType === entityType);
+    const found = at
+      ? all.map(e => this.storage.getEntity(e.id, undefined, at)).filter((e): e is Entity => !!e)
+      : all;
+    found.sort((a, b) => `${a.entityType}|${a.name ?? ''}|${a.id}`.localeCompare(`${b.entityType}|${b.name ?? ''}|${b.id}`));
+    const page = found.slice(offset, offset + limit);
+    return {
+      success: true,
+      result: {
+        entities: page.map(e => this.entityDict(e)), count: page.length, total: found.length,
+        limit, offset, as_of: at ? at.toISOString() : null,
       },
     };
   }

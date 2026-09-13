@@ -1,6 +1,6 @@
 {
   "name": "the-goodies-typescript",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "TypeScript client for The Goodies smart home knowledge graph",
   "private": true,
   "workspaces": [

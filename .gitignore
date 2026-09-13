@@ -45,3 +45,4 @@ pnpm-debug.log*
 .claude-flow/
 .agentic-qe/
 ruvector.db
+graphify-out/

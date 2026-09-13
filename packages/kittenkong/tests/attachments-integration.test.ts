@@ -53,8 +53,9 @@ const getJson = (s: ServerHandle, path: string) =>
 
 /** Any device from the seeded graph, to hang attachments off. */
 async function someDeviceId(s: ServerHandle): Promise<string> {
-  const body = await getJson(s, '/api/v1/graph/entities?entity_type=device&limit=1');
-  const list = body.entities ?? body.results ?? body;
+  // ADR-015: the graph REST routes are gone; the tools are the interface.
+  const body = await (await callTool(s, 'list_entities', { entity_type: 'device', limit: 1 })).json();
+  const list = body.result?.entities ?? [];
   const first = Array.isArray(list) ? list[0] : list?.[0];
   expect(first, 'seeded graph must contain a device').toBeTruthy();
   return first.id;
@@ -106,7 +107,7 @@ describe('attach_photo', () => {
 
       // content.blob_id is the ONE link to the blobs table, and none of the
       // six retired conventions may come back.
-      const entity = await getJson(s, `/api/v1/graph/entities/${result.attachment_id}`);
+      const entity = (await (await callTool(s, 'get_entity_details', { entity_id: result.attachment_id })).json()).result;
       const content = entity.content ?? entity.entity?.content;
       expect(content.blob_id).toBe(result.blob_id);
       for (const retired of ['is_blob', 'has_blob', 'data_b64',
