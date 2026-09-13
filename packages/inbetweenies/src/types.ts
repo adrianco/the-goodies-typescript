@@ -22,61 +22,95 @@
  * Python: inbetweenies/models.py
  */
 
-/** Entity types in the knowledge graph */
+/**
+ * Entity types in the knowledge graph.
+ *
+ * Values are the WIRE FORMAT and are lowercase. They used to be uppercase,
+ * which the sync engine papered over by upper-casing everything the server
+ * sent. That worked only while the database also held uppercase; once it was
+ * normalised (ADR-012 §1) the same push would have written 'DEVICE' alongside
+ * 'device' and fragmented the graph.
+ */
 export enum EntityType {
-  HOME = 'HOME',
-  ROOM = 'ROOM',
-  DEVICE = 'DEVICE',
-  ZONE = 'ZONE',
-  DOOR = 'DOOR',
-  WINDOW = 'WINDOW',
-  PROCEDURE = 'PROCEDURE',
-  MANUAL = 'MANUAL',
-  NOTE = 'NOTE',
-  SCHEDULE = 'SCHEDULE',
-  AUTOMATION = 'AUTOMATION',
-  APP = 'APP'
+  HOME = 'home',
+  ROOM = 'room',
+  DEVICE = 'device',
+  ZONE = 'zone',
+  DOOR = 'door',
+  WINDOW = 'window',
+  PROCEDURE = 'procedure',
+  /** PDF attachment. Carries a blob via content.blobId. */
+  MANUAL = 'manual',
+  /** Image attachment. Carries a blob via content.blobId. */
+  PHOTO = 'photo',
+  NOTE = 'note',
+  SCHEDULE = 'schedule',
+  AUTOMATION = 'automation',
+  APP = 'app'
 }
 
-/** Source types for entity creation */
+/**
+ * How a record reached the graph -- nothing more.
+ *
+ * Deliberately NOT the system that runs an automation: that stays true however
+ * the record arrived and belongs on an `app` entity linked by MANAGES
+ * (ADR-013 §4). ZIGBEE, ZWAVE and API were removed -- the server has never
+ * accepted them, so an entity defaulted to 'API' was rejected by the
+ * vocabulary.
+ */
 export enum SourceType {
-  MANUAL = 'MANUAL',
-  HOMEKIT = 'HOMEKIT',
-  MATTER = 'MATTER',
-  ZIGBEE = 'ZIGBEE',
-  ZWAVE = 'ZWAVE',
-  API = 'API'
+  MANUAL = 'manual',
+  HOMEKIT = 'homekit',
+  MATTER = 'matter',
+  IMPORTED = 'imported',
+  GENERATED = 'generated'
 }
 
 /** Relationship types between entities */
 export enum RelationshipType {
-  LOCATED_IN = 'LOCATED_IN',
-  CONTROLS = 'CONTROLS',
-  CONNECTS_TO = 'CONNECTS_TO',
-  PART_OF = 'PART_OF',
-  MANAGES = 'MANAGES',
-  DOCUMENTED_BY = 'DOCUMENTED_BY',
-  PROCEDURE_FOR = 'PROCEDURE_FOR',
-  TRIGGERED_BY = 'TRIGGERED_BY',
-  DEPENDS_ON = 'DEPENDS_ON',
-  CONTROLLED_BY_APP = 'CONTROLLED_BY_APP',
-  HAS_BLOB = 'HAS_BLOB'
+  /** Spatial containment: where a thing IS. */
+  LOCATED_IN = 'located_in',
+  /** Composition: what a thing is a COMPONENT of. Not containment. */
+  PART_OF = 'part_of',
+  CONNECTS_TO = 'connects_to',
+  CONTROLS = 'controls',
+  AUTOMATES = 'automates',
+  MONITORS = 'monitors',
+  TRIGGERED_BY = 'triggered_by',
+  DEPENDS_ON = 'depends_on',
+  /** An app manages what it runs. Replaces the deleted CONTROLLED_BY_APP. */
+  MANAGES = 'manages',
+  /** Attaches a note, a procedure, or a `manual` (PDF). */
+  DOCUMENTED_BY = 'documented_by',
+  PROCEDURE_FOR = 'procedure_for',
+  /** Attaches a `photo`. Replaces the deleted HAS_BLOB. */
+  HAS_PHOTO = 'has_photo'
 }
 
 /** BLOB types for binary storage */
 export enum BlobType {
-  PDF = 'PDF',
-  JPEG = 'JPEG',
-  PNG = 'PNG',
-  BINARY = 'BINARY'
+  PDF = 'pdf',
+  JPEG = 'jpeg',
+  PNG = 'png',
+  ICON = 'icon',
+  DOCUMENT = 'document',
+  DATA = 'data'
 }
 
-/** BLOB sync status */
+/**
+ * BLOB sync status.
+ *
+ * Deliberately UPPERCASE where the other enums are lowercase. These are the
+ * only values that are engine state rather than domain vocabulary, and on the
+ * Python side the column is still a SQLEnum, which persists member *names*.
+ * Lowercasing these would break the one column ADR-012 §1 did not convert.
+ */
 export enum BlobStatus {
   PENDING_UPLOAD = 'PENDING_UPLOAD',
   UPLOADED = 'UPLOADED',
+  PENDING_DOWNLOAD = 'PENDING_DOWNLOAD',
   DOWNLOADED = 'DOWNLOADED',
-  SYNC_FAILED = 'SYNC_FAILED'
+  SYNC_ERROR = 'SYNC_ERROR'
 }
 
 /** Base entity structure */

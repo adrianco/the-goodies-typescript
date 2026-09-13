@@ -8,7 +8,8 @@
  * PORTED FROM: Python blowing-off/blowingoff/client.py
  */
 
-import type { Entity, EntityType, SyncResult } from '@the-goodies/inbetweenies';
+import type { Entity, SyncResult } from '@the-goodies/inbetweenies';
+import { EntityType, RelationshipType } from '@the-goodies/inbetweenies';
 import { AuthManager } from './auth';
 import { SyncEngine, type SyncObserver } from './sync/engine';
 import { LocalGraphStorage } from './graph/local-storage';
@@ -31,6 +32,33 @@ export interface KittenKongOptions {
  *
  * All 12 MCP tools work locally on cached data, enabling offline operation.
  */
+/**
+ * Tools the server answers, not the local cache.
+ *
+ * Attaching a photo means getting bytes into the server's blob store, and the
+ * local replica has no blob store to put them in. Inventing a local one is the
+ * habit that produced inline base64 in entity content (ADR-013 §3), so these
+ * go to the authority instead and arrive back on the next sync.
+ *
+ * get_entity_versions and get_statistics are here because the local cache
+ * holds only current rows -- it cannot answer a question about history.
+ */
+const SERVER_BACKED_TOOLS = new Set([
+  'attach_photo',
+  'attach_document',
+  'get_blob',
+  'get_entity_versions',
+  'tombstone_entity',
+  'get_statistics',
+]);
+
+/** Of those, the ones that change server state and so need a sync afterwards. */
+const MUTATING_SERVER_TOOLS = new Set([
+  'attach_photo',
+  'attach_document',
+  'tombstone_entity',
+]);
+
 export class KittenKongClient {
   public readonly serverUrl: string;
   public readonly clientId: string;
@@ -291,6 +319,23 @@ export class KittenKongClient {
    * Execute an MCP tool locally
    */
   async executeMCPTool(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+    if (SERVER_BACKED_TOOLS.has(toolName)) {
+      if (!this.syncEngine) {
+        return { success: false, error: `${toolName} needs a server connection; call connect() first` };
+      }
+      try {
+        const result = await this.syncEngine.callServerTool(toolName, args);
+        // Attachments and tombstones create or change entities server-side.
+        // Pull them into the local cache now rather than leaving the caller to
+        // read stale data until the next background tick.
+        if (MUTATING_SERVER_TOOLS.has(toolName)) {
+          await this.sync().catch(() => undefined);
+        }
+        return { success: true, result };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
     return this.graphOps.executeTool(toolName, args);
   }
 
@@ -380,43 +425,43 @@ export class KittenKongClient {
   async demoMCPFunctionality(): Promise<void> {
     // Create a home
     const home = await this.createEntity({
-      entityType: 'HOME' as any,
+      entityType: EntityType.HOME,
       name: 'Demo Home',
       content: { address: '123 Demo St' },
     });
 
     // Create rooms
     const livingRoom = await this.createEntity({
-      entityType: 'ROOM' as any,
+      entityType: EntityType.ROOM,
       name: 'Living Room',
       content: { floor: 1 },
     });
 
     const kitchen = await this.createEntity({
-      entityType: 'ROOM' as any,
+      entityType: EntityType.ROOM,
       name: 'Kitchen',
       content: { floor: 1 },
     });
 
     // Create devices
     const lightSwitch = await this.createEntity({
-      entityType: 'DEVICE' as any,
+      entityType: EntityType.DEVICE,
       name: 'Smart Light',
       content: { type: 'light', brand: 'Philips Hue' },
     });
 
     const thermostat = await this.createEntity({
-      entityType: 'DEVICE' as any,
+      entityType: EntityType.DEVICE,
       name: 'Thermostat',
       content: { type: 'thermostat', brand: 'Ecobee' },
     });
 
     // Create relationships
-    await this.createRelationship(livingRoom.id, home.id, 'PART_OF');
-    await this.createRelationship(kitchen.id, home.id, 'PART_OF');
-    await this.createRelationship(lightSwitch.id, livingRoom.id, 'LOCATED_IN');
-    await this.createRelationship(thermostat.id, kitchen.id, 'LOCATED_IN');
-    await this.createRelationship(livingRoom.id, kitchen.id, 'CONNECTS_TO');
+    await this.createRelationship(livingRoom.id, home.id, RelationshipType.LOCATED_IN);
+    await this.createRelationship(kitchen.id, home.id, RelationshipType.LOCATED_IN);
+    await this.createRelationship(lightSwitch.id, livingRoom.id, RelationshipType.LOCATED_IN);
+    await this.createRelationship(thermostat.id, kitchen.id, RelationshipType.LOCATED_IN);
+    await this.createRelationship(livingRoom.id, kitchen.id, RelationshipType.CONNECTS_TO);
 
     // Test MCP tools
     const devicesResult = await this.executeMCPTool('get_devices_in_room', { room_id: livingRoom.id });

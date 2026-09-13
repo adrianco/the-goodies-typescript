@@ -6,6 +6,7 @@
  */
 
 import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict } from '@the-goodies/inbetweenies';
+import { EntityType, SourceType } from '@the-goodies/inbetweenies';
 import type { AuthManager } from '../auth';
 import { InbetweeniesProtocol, type Change, type RelationshipChange } from './protocol';
 import { ConflictResolver } from './conflict-resolver';
@@ -16,6 +17,12 @@ export type SyncObserver = (event: string, data: any) => void | Promise<void>;
 
 export class SyncEngine {
   private protocol: InbetweeniesProtocol;
+
+  /** Call a tool on the server's MCP endpoint. See InbetweeniesProtocol.callServerTool. */
+  async callServerTool(toolName: string, args: Record<string, any>): Promise<any> {
+    return this.protocol.callServerTool(toolName, args);
+  }
+
   private graphOps: LocalGraphOperations | null = null;
   private pendingSyncEntities: Set<string> = new Set();
   private pendingSyncRelationships: Set<string> = new Set();
@@ -140,7 +147,7 @@ export class SyncEngine {
         if (resolved) {
           allConflicts.push({
             entityId: conflict.entityId,
-            entityType: 'NOTE' as any, // Will be resolved by actual entity lookup
+            entityType: EntityType.NOTE as any, // Will be resolved by actual entity lookup
             localVersion: conflict.localVersion,
             remoteVersion: conflict.remoteVersion,
             reason: conflict.resolutionStrategy,
@@ -174,7 +181,7 @@ export class SyncEngine {
           for (const conflict of pushConflicts) {
             allConflicts.push({
               entityId: conflict.entityId,
-              entityType: 'NOTE' as any,
+              entityType: EntityType.NOTE as any,
               localVersion: conflict.localVersion,
               remoteVersion: conflict.remoteVersion,
               reason: conflict.resolutionStrategy,
@@ -348,11 +355,11 @@ export class SyncEngine {
       const entity: Entity = {
         id: change.entityId,
         version: change.version || createVersion(change.data.userId || 'system'),
-        entityType: (change.data.entityType || 'NOTE').toUpperCase() as any,
+        entityType: (change.data.entityType || EntityType.NOTE) as any,
         name: change.data.name || '',
         content: change.data.content || {},
         userId: change.data.userId || 'system',
-        sourceType: (change.data.sourceType || 'API').toUpperCase() as any,
+        sourceType: (change.data.sourceType || SourceType.IMPORTED) as any,
         parentVersions: change.data.parentVersions || [],
         createdAt: change.data.createdAt ? new Date(change.data.createdAt) : new Date(),
         lastModified: change.timestamp ? new Date(change.timestamp) : new Date(),
