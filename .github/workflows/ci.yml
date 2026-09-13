@@ -41,9 +41,10 @@ jobs:
           pip install -e ./the-goodies
 
       - name: Set up pnpm
+        # Version comes from package.json's packageManager (giving one here too
+        # is an error). Must precede setup-node, which looks for pnpm once
+        # packageManager is set.
         uses: pnpm/action-setup@v4
-        with:
-          version: 10  # must precede setup-node: packageManager makes it look for pnpm
 
       - name: Set up Node
         uses: actions/setup-node@v5
