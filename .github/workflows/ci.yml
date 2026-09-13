@@ -29,6 +29,7 @@ jobs:
           path: the-goodies
 
       - name: Set up Python
+        id: py
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -60,8 +61,9 @@ jobs:
       - name: Test
         # The harness starts FunkyGibbon on an ephemeral port with a real
         # Argon2 admin hash; nothing listens on 8000 and nothing is mocked.
+        # FUNKYGIBBON_PYTHON must be a path (the harness existsSync-checks it).
         env:
           FUNKYGIBBON_REPO: ${{ github.workspace }}/the-goodies
-          FUNKYGIBBON_PYTHON: python
+          FUNKYGIBBON_PYTHON: ${{ steps.py.outputs.python-path }}
         run: npx vitest run
         working-directory: packages/kittenkong
