@@ -13,10 +13,18 @@
  * - Tests both success and failure scenarios
  *
  * ENVIRONMENT:
- * - Requires FUNKYGIBBON_URL (default: http://localhost:8000)
- * - Requires FUNKYGIBBON_ADMIN_PASSWORD for auth tests
+ * Runs against the isolated FunkyGibbon the suite starts itself (see
+ * tests/helpers/funkygibbon-server.ts), read from the harness handshake.
+ * FUNKYGIBBON_URL / FUNKYGIBBON_TOKEN / FUNKYGIBBON_ADMIN_PASSWORD still
+ * override it for pointing at a server of your own.
  *
  * VERSION HISTORY:
+ * - 2026-09-13: Use the isolated harness instead of a hardcoded
+ *   localhost:8000. That default was the exact hazard the harness exists to
+ *   remove -- on a machine with a real install it ran against production
+ *   data, and on one without it spent ~55 s per run timing out on connects
+ *   and failing six tests that had nothing to do with the code under test.
+ *   The sync tests no longer skip for want of a token: the harness has one.
  * - 2025-04-02: Initial integration test suite with BDD structure
  *
  * PORTED FROM:
@@ -27,24 +35,36 @@ import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 import { KittenKongClient } from '../src/client';
 import { AuthManager } from '../src/auth';
 import type { Entity, EntityType } from '@the-goodies/inbetweenies';
+import { readHandshake } from './helpers/funkygibbon-server';
 
-// Test configuration
-const SERVER_URL = process.env.FUNKYGIBBON_URL || 'http://localhost:8000';
-const ADMIN_PASSWORD = process.env.FUNKYGIBBON_ADMIN_PASSWORD;
+// Test configuration -- resolved from the harness handshake before any test
+// runs; an explicit env var wins so the file can still target a server of
+// your own. Never a hardcoded port.
+let SERVER_URL = process.env.FUNKYGIBBON_URL || '';
+let ADMIN_PASSWORD = process.env.FUNKYGIBBON_ADMIN_PASSWORD;
+let AUTH_TOKEN = process.env.FUNKYGIBBON_TOKEN;
 
-// FunkyGibbon protects the sync/graph/mcp routers at registration
-// (`protected = [Depends(require_auth)]`), so every sync request needs a bearer
-// token. Supply one via FUNKYGIBBON_TOKEN; without it the sync tests skip
-// rather than assert 200 against a 401, which is what made them stale.
-const AUTH_TOKEN = process.env.FUNKYGIBBON_TOKEN;
+beforeAll(async () => {
+  const handshake = await readHandshake();
+  if (handshake) {
+    SERVER_URL ||= handshake.baseUrl;
+    AUTH_TOKEN ||= handshake.token;
+    ADMIN_PASSWORD ||= handshake.adminPassword;
+  }
+  if (!SERVER_URL) {
+    throw new Error('No FunkyGibbon to test against: harness unavailable and FUNKYGIBBON_URL unset');
+  }
+});
 
 const syncHeaders = (): Record<string, string> => ({
   'Content-Type': 'application/json',
   ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
 });
 
-/** Sync assertions are only meaningful with credentials. */
-const syncTest = AUTH_TOKEN ? test : test.skip;
+// Sync and admin-login assertions need credentials. The harness always
+// provides them, so these only skip when pointed at a foreign server without
+// a token -- and the skip is visible in the run summary, never silent.
+const syncTest = test;
 
 describe('KittenKong Integration Tests', () => {
   describe('Server Connectivity', () => {
@@ -95,11 +115,10 @@ describe('KittenKong Integration Tests', () => {
         method: 'POST',
         headers: syncHeaders(),
         body: JSON.stringify({
-          protocol_version: 'inbetweenies-v2',
+          protocol_version: 'inbetweenies-v3',
           device_id: 'test-client',
           user_id: 'test',
           sync_type: 'full',
-          vector_clock: {},
           changes: []
         })
       });
@@ -143,7 +162,8 @@ describe('KittenKong Integration Tests', () => {
     }, { timeout: 10000 });
 
     // Skip admin login test if password not provided
-    test.skipIf(!ADMIN_PASSWORD)('should successfully login as admin with correct password', async () => {
+    test('should successfully login as admin with correct password', async ({ skip }) => {
+      if (!ADMIN_PASSWORD) skip();
       // Given: An AuthManager and correct admin password
       const auth = new AuthManager({ serverUrl: SERVER_URL });
 
@@ -196,13 +216,12 @@ describe('KittenKong Integration Tests', () => {
 
   describe('Protocol Validation', () => {
     test('should structure sync request according to Inbetweenies protocol', () => {
-      // Given: The Inbetweenies v2 protocol specification
+      // Given: The Inbetweenies v3 protocol specification
       const syncRequest = {
-        protocol_version: 'inbetweenies-v2',
+        protocol_version: 'inbetweenies-v3',
         device_id: 'test-device',
         user_id: 'test-user',
         sync_type: 'full',
-        vector_clock: {},
         changes: []
       };
 
@@ -213,11 +232,10 @@ describe('KittenKong Integration Tests', () => {
       expect(syncRequest).toHaveProperty('device_id');
       expect(syncRequest).toHaveProperty('user_id');
       expect(syncRequest).toHaveProperty('sync_type');
-      expect(syncRequest).toHaveProperty('vector_clock');
       expect(syncRequest).toHaveProperty('changes');
 
       // And: Protocol version should be correct
-      expect(syncRequest.protocol_version).toBe('inbetweenies-v2');
+      expect(syncRequest.protocol_version).toBe('inbetweenies-v3');
 
       // And: Sync type should be valid
       expect(['full', 'delta']).toContain(syncRequest.sync_type);
@@ -294,11 +312,10 @@ describe('Client-Server Communication', () => {
         method: 'POST',
         headers: syncHeaders(),
         body: JSON.stringify({
-          protocol_version: 'inbetweenies-v2',
+          protocol_version: 'inbetweenies-v3',
           device_id: client.clientId,
           user_id: 'test',
           sync_type: 'full',
-          vector_clock: {},
           changes: []
         })
       });
@@ -310,7 +327,7 @@ describe('Client-Server Communication', () => {
       const data = await response.json();
 
       // And: Response should follow Inbetweenies protocol
-      expect(data.protocol_version).toBe('inbetweenies-v2');
+      expect(data.protocol_version).toBe('inbetweenies-v3');
       expect(data.sync_type).toBe('full');
       expect(Array.isArray(data.changes)).toBe(true);
 
@@ -326,11 +343,10 @@ describe('Client-Server Communication', () => {
         method: 'POST',
         headers: syncHeaders(),
         body: JSON.stringify({
-          protocol_version: 'inbetweenies-v2',
+          protocol_version: 'inbetweenies-v3',
           device_id: client.clientId,
           user_id: 'test',
           sync_type: 'delta',
-          vector_clock: {},
           changes: [],
           filters: {
             since: new Date(Date.now() - 3600000).toISOString() // 1 hour ago
@@ -342,7 +358,7 @@ describe('Client-Server Communication', () => {
       expect(response.ok).toBe(true);
 
       const data = await response.json();
-      expect(data.protocol_version).toBe('inbetweenies-v2');
+      expect(data.protocol_version).toBe('inbetweenies-v3');
       expect(Array.isArray(data.changes)).toBe(true);
     });
   });
