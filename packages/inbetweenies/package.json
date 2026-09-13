@@ -1,6 +1,6 @@
 {
   "name": "@the-goodies/inbetweenies",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "TypeScript protocol package for The Goodies - entity models and relationships",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

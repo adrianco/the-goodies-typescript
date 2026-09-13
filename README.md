@@ -25,14 +25,22 @@ Provides:
 - In-memory local graph cache (see [Sync behaviour](#sync-behaviour))
 - Sync engine (Inbetweenies v3: interval edges, per-id acknowledgement)
 - Authentication management
-- MCP tool execution (22 tools, served over stdio — the same catalog FunkyGibbon serves)
+- MCP tool execution (23 tools, served over stdio — the same catalog FunkyGibbon serves)
 
 ## Installation
 
+This repository is a **pnpm workspace** (`packages/kittenkong` depends on
+`@the-goodies/inbetweenies` as `workspace:*`, which npm does not understand —
+`npm install` fails with `EUNSUPPORTEDPROTOCOL`). `packageManager` in
+`package.json` pins pnpm, so with corepack enabled the right tool is selected:
+
 ```bash
-npm install @the-goodies/inbetweenies
-npm install @the-goodies/kittenkong
+corepack enable          # once
+pnpm install --frozen-lockfile
+pnpm build
 ```
+
+The packages are not published to a registry; use them from this checkout.
 
 ## Quick Start
 
@@ -68,22 +76,22 @@ await client.sync();
 ## Development
 
 ```bash
-# Install dependencies
-npm install
+# Install dependencies (pnpm, not npm — see Installation)
+pnpm install --frozen-lockfile
 
 # Build all packages
-npm run build
+pnpm build
 
 # Run tests
-npm test
+pnpm test
 
 # Watch mode
-npm run dev
+pnpm dev
 ```
 
 ## Testing
 
-Unit tests need nothing but `npm test`.
+Unit tests need nothing but `pnpm test`.
 
 Integration tests start **their own** FunkyGibbon server on a freshly allocated
 ephemeral port, with a throwaway seeded database and a real admin login — they
@@ -91,7 +99,7 @@ never touch a running install and never bind port 8000. Point them at a Python
 checkout:
 
 ```bash
-FUNKYGIBBON_REPO=~/the-goodies npm test
+FUNKYGIBBON_REPO=~/the-goodies pnpm test
 ```
 
 Without `FUNKYGIBBON_REPO` (and no sibling checkout to discover) the
