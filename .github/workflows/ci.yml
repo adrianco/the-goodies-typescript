@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # The integration suite drives a real FunkyGibbon (tests/helpers/funkygibbon-server.ts)
+  # started from a checkout of the Python repo. Pin the server release this client
+  # matches; bump it together with the package versions.
+  FUNKYGIBBON_REF: v0.7.0
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout KittenKong
+        uses: actions/checkout@v7
+
+      - name: Checkout FunkyGibbon (the-goodies)
+        uses: actions/checkout@v7
+        with:
+          repository: adrianco/the-goodies
+          ref: ${{ env.FUNKYGIBBON_REF }}
+          path: the-goodies
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install FunkyGibbon
+        # One uv workspace, one install step (the-goodies ADR-010 §6).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./the-goodies
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          npx tsc -p packages/inbetweenies/tsconfig.json
+          npx tsc -p packages/kittenkong/tsconfig.json
+
+      - name: Test
+        # The harness starts FunkyGibbon on an ephemeral port with a real
+        # Argon2 admin hash; nothing listens on 8000 and nothing is mocked.
+        env:
+          FUNKYGIBBON_REPO: ${{ github.workspace }}/the-goodies
+          FUNKYGIBBON_PYTHON: python
+        run: npx vitest run
+        working-directory: packages/kittenkong
