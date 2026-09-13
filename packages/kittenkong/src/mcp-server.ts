@@ -373,7 +373,7 @@ async function main(): Promise<void> {
   await client.startBackgroundSync(SYNC_INTERVAL);
 
   const server = new Server(
-    { name: 'kittenkong', version: '0.5.0' },
+    { name: 'kittenkong', version: '0.6.0' },
     { capabilities: { tools: {} } },
   );
 
