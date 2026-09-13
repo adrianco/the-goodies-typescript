@@ -2,7 +2,7 @@
 /**
  * KittenKong MCP Server
  *
- * Stdio MCP server that exposes all 12 knowledge graph tools via the
+ * Stdio MCP server that exposes all 22 knowledge graph tools via the
  * KittenKongClient. Data is synced from FunkyGibbon into local memory on
  * startup, then kept fresh via background sync.
  *
@@ -57,6 +57,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         entity_id: { type: 'string', description: 'Entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['entity_id'],
     },
@@ -116,6 +117,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         room_id: { type: 'string', description: 'Room entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['room_id'],
     },
@@ -127,6 +129,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         device_id: { type: 'string', description: 'Device entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['device_id'],
     },
@@ -138,6 +141,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         room_id: { type: 'string', description: 'Room entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['room_id'],
     },
@@ -151,6 +155,7 @@ const TOOLS: Tool[] = [
         from_entity_id: { type: 'string', description: 'Starting entity ID' },
         to_entity_id: { type: 'string', description: 'Target entity ID' },
         max_depth: { type: 'number', description: 'Maximum path depth (default 5)' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['from_entity_id', 'to_entity_id'],
     },
@@ -175,6 +180,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         device_id: { type: 'string', description: 'Device entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['device_id'],
     },
@@ -186,6 +192,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         room_id: { type: 'string', description: 'Room entity ID' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
       },
       required: ['room_id'],
     },
@@ -286,6 +293,64 @@ const TOOLS: Tool[] = [
     name: 'get_statistics',
     description: 'Counts of entities and relationships by type, for the whole graph.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  // --- Relationships and time (issue #85, ADR-004 §3, ADR-015) ---------
+  // MCP is the client interface: everything a client does to the graph is a
+  // tool. `end_relationship` is the delete -- an ended interval, kept as
+  // history. Every read above also takes `at` and answers as of that instant.
+  {
+    name: 'list_relationships',
+    description: 'List edges by endpoint and/or type. Current by default; `at` for an instant, `include_history` for every interval ever recorded.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_entity_id: { type: 'string', description: 'Filter by source entity' },
+        to_entity_id: { type: 'string', description: 'Filter by target entity' },
+        relationship_type: { type: 'string', description: 'Filter by type, e.g. located_in' },
+        include_history: { type: 'boolean', description: 'Include retired intervals. Default false.' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
+      },
+    },
+  },
+  {
+    name: 'get_connected',
+    description: 'Every entity one edge away from an entity, with the edge, in either direction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_id: { type: 'string', description: 'The centre entity' },
+        relationship_type: { type: 'string', description: 'Optional filter by edge type' },
+        direction: { type: 'string', enum: ['outgoing', 'incoming', 'both'], description: 'Default both' },
+        at: { type: 'string', description: 'Answer as of this instant (ISO-8601 UTC). Omitted means now.' },
+      },
+      required: ['entity_id'],
+    },
+  },
+  {
+    name: 'end_relationship',
+    description: 'Remove an edge by ending its interval. This is the delete: the row is kept as history with its end recorded. To move an edge, end it and create the new one. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relationship_id: { type: 'string', description: 'The edge to end' },
+        reason: { type: 'string', description: 'Why -- recorded in the result' },
+        user_id: { type: 'string', description: 'Who ended it' },
+        at: { type: 'string', description: 'When it stopped being true (ISO-8601 UTC). Default now.' },
+      },
+      required: ['relationship_id'],
+    },
+  },
+  {
+    name: 'get_graph_diff',
+    description: 'What changed between two instants: entities that gained a version, edges that started, edges that ended.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'Start of the window, exclusive (ISO-8601 UTC)' },
+        until: { type: 'string', description: 'End of the window, inclusive. Default now.' },
+      },
+      required: ['since'],
+    },
   },
 ];
 

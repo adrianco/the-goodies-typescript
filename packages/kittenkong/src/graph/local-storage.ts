@@ -6,7 +6,7 @@
  */
 
 import type { Entity, EntityRelationship, EntityType } from '@the-goodies/inbetweenies';
-import { RelationshipType, isCurrentAt, sameInstant } from '@the-goodies/inbetweenies';
+import { RelationshipType, isCurrentAt, sameInstant, versionKeyAt } from '@the-goodies/inbetweenies';
 
 /** Read options for interval-aware relationship queries (ADR-004). */
 export interface RelationshipQuery {
@@ -55,12 +55,23 @@ export class LocalGraphStorage {
   /**
    * Get an entity by ID (latest version by default)
    */
-  getEntity(entityId: string, version?: string): Entity | null {
+  getEntity(entityId: string, version?: string, at?: Date): Entity | null {
     const versions = this.entities.get(entityId);
     if (!versions || versions.length === 0) return null;
 
     if (version) {
       return versions.find(v => v.version === version) || null;
+    }
+
+    if (at) {
+      // ADR-004 §3.2 / ADR-009: the replica answers as-of locally. The
+      // greatest version stamped at or before `at`; none means the entity did
+      // not exist then, and a tombstone current then means the same.
+      const key = versionKeyAt(at);
+      const eligible = versions.filter(v => v.version <= key);
+      if (eligible.length === 0) return null;
+      const found = eligible.reduce((a, b) => (b.version > a.version ? b : a));
+      return (found.content as any)?.deleted === true ? null : found;
     }
 
     return versions[versions.length - 1];
@@ -196,13 +207,16 @@ export class LocalGraphStorage {
   /**
    * Get devices in a room using the room index
    */
-  getDevicesInRoom(roomId: string): Entity[] {
-    const deviceIds = this.roomIndex.get(roomId);
+  getDevicesInRoom(roomId: string, at?: Date): Entity[] {
+    // The room index caches `at = now`; an as-of question walks the intervals.
+    const deviceIds = at
+      ? new Set(this.getRelationships(undefined, roomId, RelationshipType.LOCATED_IN, { at }).map(r => r.fromEntityId))
+      : this.roomIndex.get(roomId);
     if (!deviceIds) return [];
 
     const results: Entity[] = [];
     for (const id of deviceIds) {
-      const entity = this.getEntity(id);
+      const entity = this.getEntity(id, undefined, at);
       if (this.isActive(entity)) results.push(entity!);
     }
     return results;
@@ -243,11 +257,11 @@ export class LocalGraphStorage {
   /**
    * Get all entities (latest versions)
    */
-  getAllEntities(): Entity[] {
+  getAllEntities(includeDeleted = false): Entity[] {
     const results: Entity[] = [];
     for (const versions of this.entities.values()) {
       const entity = versions[versions.length - 1];
-      if (this.isActive(entity)) {
+      if (includeDeleted || this.isActive(entity)) {
         results.push(entity);
       }
     }

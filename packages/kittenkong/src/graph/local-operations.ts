@@ -9,6 +9,8 @@ import {
   EntityType,
   SourceType,
   RelationshipType,
+  parseAt,
+  versionKeyAt,
   type Entity,
   type EntityRelationship,
 } from '@the-goodies/inbetweenies';
@@ -33,6 +35,11 @@ const MCP_TOOLS = [
   'get_procedures_for_device',
   'get_automations_in_room',
   'update_entity',
+  // Issue #85 / ADR-004 §3 -- relationship parity and the as-of surface.
+  'list_relationships',
+  'get_connected',
+  'end_relationship',
+  'get_graph_diff',
 ] as const;
 
 export type MCPToolName = typeof MCP_TOOLS[number];
@@ -54,11 +61,11 @@ export class LocalGraphOperations {
   async executeTool(toolName: string, args: Record<string, any>): Promise<ToolResult> {
     switch (toolName) {
       case 'get_devices_in_room':
-        return this.getDevicesInRoom(args.room_id || args.roomId);
+        return this.getDevicesInRoom(args.room_id || args.roomId, this.at(args));
       case 'find_device_controls':
-        return this.findDeviceControls(args.device_id || args.deviceId);
+        return this.findDeviceControls(args.device_id || args.deviceId, this.at(args));
       case 'get_room_connections':
-        return this.getRoomConnections(args.room_id || args.roomId);
+        return this.getRoomConnections(args.room_id || args.roomId, this.at(args));
       case 'search_entities':
         return this.searchEntitiesTool(args.query, args.entity_types || args.entityTypes, args.limit);
       case 'create_entity':
@@ -80,10 +87,11 @@ export class LocalGraphOperations {
         return this.findPathTool(
           args.from_entity_id || args.fromEntityId,
           args.to_entity_id || args.toEntityId,
-          args.max_depth || args.maxDepth
+          args.max_depth || args.maxDepth,
+          this.at(args)
         );
       case 'get_entity_details':
-        return this.getEntityDetailsTool(args.entity_id || args.entityId);
+        return this.getEntityDetailsTool(args.entity_id || args.entityId, this.at(args));
       case 'find_similar_entities':
         return this.findSimilarEntitiesTool(
           args.entity_id || args.entityId,
@@ -91,9 +99,33 @@ export class LocalGraphOperations {
           args.limit
         );
       case 'get_procedures_for_device':
-        return this.getProceduresForDevice(args.device_id || args.deviceId);
+        return this.getProceduresForDevice(args.device_id || args.deviceId, this.at(args));
       case 'get_automations_in_room':
-        return this.getAutomationsInRoom(args.room_id || args.roomId);
+        return this.getAutomationsInRoom(args.room_id || args.roomId, this.at(args));
+      case 'list_relationships':
+        return this.listRelationshipsTool(
+          args.from_entity_id || args.fromEntityId,
+          args.to_entity_id || args.toEntityId,
+          args.relationship_type || args.relationshipType,
+          !!(args.include_history ?? args.includeHistory),
+          this.at(args)
+        );
+      case 'get_connected':
+        return this.getConnectedTool(
+          args.entity_id || args.entityId,
+          args.relationship_type || args.relationshipType,
+          args.direction || 'both',
+          this.at(args)
+        );
+      case 'end_relationship':
+        return this.endRelationshipTool(
+          args.relationship_id || args.relationshipId,
+          args.reason,
+          args.user_id || args.userId,
+          this.at(args)
+        );
+      case 'get_graph_diff':
+        return this.getGraphDiffTool(args.since, args.until);
       case 'update_entity':
         return this.updateEntityTool(
           args.entity_id || args.entityId,
@@ -107,6 +139,12 @@ export class LocalGraphOperations {
           result: { available_tools: this.getAvailableTools() },
         };
     }
+  }
+
+  /** The as-of argument every graph read accepts (ADR-004 §3). Bad input throws;
+   *  executeTool's callers surface that as a ToolResult error. */
+  private at(args: Record<string, any>): Date | undefined {
+    return parseAt(args.at);
   }
 
   // --- Entity CRUD ---
@@ -224,17 +262,17 @@ export class LocalGraphOperations {
 
   // --- MCP Tool Implementations ---
 
-  private async getDevicesInRoom(roomId: string): Promise<ToolResult> {
+  private async getDevicesInRoom(roomId: string, at?: Date): Promise<ToolResult> {
     if (!roomId) return { success: false, error: 'room_id is required' };
 
-    const devices = this.storage.getDevicesInRoom(roomId);
+    const devices = this.storage.getDevicesInRoom(roomId, at);
 
     // Also check LOCATED_IN relationships directly for broader coverage
-    const rels = this.storage.getRelationships(undefined, roomId, RelationshipType.LOCATED_IN);
+    const rels = this.storage.getRelationships(undefined,  roomId,  RelationshipType.LOCATED_IN, { at });
     const relDeviceIds = new Set(rels.map(r => r.fromEntityId));
     for (const id of relDeviceIds) {
       if (!devices.find(d => d.id === id)) {
-        const entity = this.storage.getEntity(id);
+        const entity = this.storage.getEntity(id, undefined, at);
         if (entity) devices.push(entity);
       }
     }
@@ -254,17 +292,17 @@ export class LocalGraphOperations {
     };
   }
 
-  private async findDeviceControls(deviceId: string): Promise<ToolResult> {
+  private async findDeviceControls(deviceId: string, at?: Date): Promise<ToolResult> {
     if (!deviceId) return { success: false, error: 'device_id is required' };
 
-    const device = this.storage.getEntity(deviceId);
+    const device = this.storage.getEntity(deviceId, undefined, at);
     if (!device) return { success: false, error: `Device ${deviceId} not found` };
 
     // Find what this device controls
-    const controlsRels = this.storage.getRelationships(deviceId, undefined, RelationshipType.CONTROLS);
+    const controlsRels = this.storage.getRelationships(deviceId,  undefined,  RelationshipType.CONTROLS, { at });
     const controlledDevices: any[] = [];
     for (const rel of controlsRels) {
-      const target = this.storage.getEntity(rel.toEntityId);
+      const target = this.storage.getEntity(rel.toEntityId, undefined, at);
       if (target) {
         controlledDevices.push({
           id: target.id,
@@ -276,10 +314,10 @@ export class LocalGraphOperations {
     }
 
     // Find what controls this device
-    const controlledByRels = this.storage.getRelationships(undefined, deviceId, RelationshipType.CONTROLS);
+    const controlledByRels = this.storage.getRelationships(undefined,  deviceId,  RelationshipType.CONTROLS, { at });
     const controlledBy: any[] = [];
     for (const rel of controlledByRels) {
-      const source = this.storage.getEntity(rel.fromEntityId);
+      const source = this.storage.getEntity(rel.fromEntityId, undefined, at);
       if (source) {
         controlledBy.push({
           id: source.id,
@@ -299,12 +337,12 @@ export class LocalGraphOperations {
     };
   }
 
-  private async getRoomConnections(roomId: string): Promise<ToolResult> {
+  private async getRoomConnections(roomId: string, at?: Date): Promise<ToolResult> {
     if (!roomId) return { success: false, error: 'room_id is required' };
 
     // Find rooms connected via CONNECTS_TO (bidirectional)
-    const outgoing = this.storage.getRelationships(roomId, undefined, RelationshipType.CONNECTS_TO);
-    const incoming = this.storage.getRelationships(undefined, roomId, RelationshipType.CONNECTS_TO);
+    const outgoing = this.storage.getRelationships(roomId,  undefined,  RelationshipType.CONNECTS_TO, { at });
+    const incoming = this.storage.getRelationships(undefined,  roomId,  RelationshipType.CONNECTS_TO, { at });
 
     const connectedRooms: any[] = [];
     const seen = new Set<string>();
@@ -312,7 +350,7 @@ export class LocalGraphOperations {
     for (const rel of outgoing) {
       if (!seen.has(rel.toEntityId)) {
         seen.add(rel.toEntityId);
-        const room = this.storage.getEntity(rel.toEntityId);
+        const room = this.storage.getEntity(rel.toEntityId, undefined, at);
         if (room) {
           connectedRooms.push({ id: room.id, name: room.name, properties: rel.properties });
         }
@@ -322,7 +360,7 @@ export class LocalGraphOperations {
     for (const rel of incoming) {
       if (!seen.has(rel.fromEntityId)) {
         seen.add(rel.fromEntityId);
-        const room = this.storage.getEntity(rel.fromEntityId);
+        const room = this.storage.getEntity(rel.fromEntityId, undefined, at);
         if (room) {
           connectedRooms.push({ id: room.id, name: room.name, properties: rel.properties });
         }
@@ -439,13 +477,14 @@ export class LocalGraphOperations {
   private async findPathTool(
     fromEntityId: string,
     toEntityId: string,
-    maxDepth: number = 10
+    maxDepth: number = 10,
+    at?: Date
   ): Promise<ToolResult> {
     if (!fromEntityId || !toEntityId) {
       return { success: false, error: 'from_entity_id and to_entity_id are required' };
     }
 
-    const path = await this.findPath(fromEntityId, toEntityId, maxDepth);
+    const path = await this.findPath(fromEntityId, toEntityId, maxDepth, at);
 
     if (path.length === 0) {
       return {
@@ -464,14 +503,14 @@ export class LocalGraphOperations {
     };
   }
 
-  private async getEntityDetailsTool(entityId: string): Promise<ToolResult> {
+  private async getEntityDetailsTool(entityId: string, at?: Date): Promise<ToolResult> {
     if (!entityId) return { success: false, error: 'entity_id is required' };
 
-    const entity = this.storage.getEntity(entityId);
+    const entity = this.storage.getEntity(entityId, undefined, at);
     if (!entity) return { success: false, error: `Entity ${entityId} not found` };
 
-    const outgoing = this.storage.getRelationships(entityId);
-    const incoming = this.storage.getRelationships(undefined, entityId);
+    const outgoing = this.storage.getRelationships(entityId, undefined, undefined, { at });
+    const incoming = this.storage.getRelationships(undefined,  entityId, undefined, { at });
 
     return {
       success: true,
@@ -532,14 +571,14 @@ export class LocalGraphOperations {
     };
   }
 
-  private async getProceduresForDevice(deviceId: string): Promise<ToolResult> {
+  private async getProceduresForDevice(deviceId: string, at?: Date): Promise<ToolResult> {
     if (!deviceId) return { success: false, error: 'device_id is required' };
 
-    const rels = this.storage.getRelationships(undefined, deviceId, RelationshipType.PROCEDURE_FOR);
+    const rels = this.storage.getRelationships(undefined,  deviceId,  RelationshipType.PROCEDURE_FOR, { at });
     const procedures: any[] = [];
 
     for (const rel of rels) {
-      const entity = this.storage.getEntity(rel.fromEntityId);
+      const entity = this.storage.getEntity(rel.fromEntityId, undefined, at);
       if (entity && entity.entityType === EntityType.PROCEDURE) {
         procedures.push({
           id: entity.id,
@@ -559,11 +598,11 @@ export class LocalGraphOperations {
     };
   }
 
-  private async getAutomationsInRoom(roomId: string): Promise<ToolResult> {
+  private async getAutomationsInRoom(roomId: string, at?: Date): Promise<ToolResult> {
     if (!roomId) return { success: false, error: 'room_id is required' };
 
     // Find automations that AUTOMATES relationships to entities in this room
-    const roomDeviceRels = this.storage.getRelationships(undefined, roomId, RelationshipType.LOCATED_IN);
+    const roomDeviceRels = this.storage.getRelationships(undefined,  roomId,  RelationshipType.LOCATED_IN, { at });
     const roomEntityIds = new Set([roomId, ...roomDeviceRels.map(r => r.fromEntityId)]);
 
     const automations: any[] = [];
@@ -571,11 +610,11 @@ export class LocalGraphOperations {
 
     // Check TRIGGERED_BY relationships from room entities
     for (const entityId of roomEntityIds) {
-      const triggerRels = this.storage.getRelationships(undefined, entityId, RelationshipType.TRIGGERED_BY);
+      const triggerRels = this.storage.getRelationships(undefined,  entityId,  RelationshipType.TRIGGERED_BY, { at });
       for (const rel of triggerRels) {
         if (seen.has(rel.fromEntityId)) continue;
         seen.add(rel.fromEntityId);
-        const entity = this.storage.getEntity(rel.fromEntityId);
+        const entity = this.storage.getEntity(rel.fromEntityId, undefined, at);
         if (entity && entity.entityType === EntityType.AUTOMATION) {
           automations.push({
             id: entity.id,
@@ -590,7 +629,7 @@ export class LocalGraphOperations {
     const allAutomations = this.storage.getEntitiesByType(EntityType.AUTOMATION);
     for (const auto of allAutomations) {
       if (seen.has(auto.id)) continue;
-      const locRels = this.storage.getRelationships(auto.id, roomId, RelationshipType.LOCATED_IN);
+      const locRels = this.storage.getRelationships(auto.id,  roomId,  RelationshipType.LOCATED_IN, { at });
       if (locRels.length > 0) {
         seen.add(auto.id);
         automations.push({
@@ -634,13 +673,139 @@ export class LocalGraphOperations {
     };
   }
 
+
+  // --- Relationship parity (issue #85) and the as-of surface (ADR-004 §3) ---
+  //
+  // MCP is the client interface (ADR-015): everything a client does to the
+  // graph has to be a tool. These are the three edge operations that were
+  // not, plus the temporal queries the interval model exists to answer.
+
+  private relDict(r: EntityRelationship) {
+    return {
+      id: r.id, from_entity_id: r.fromEntityId, to_entity_id: r.toEntityId,
+      type: r.relationshipType, properties: r.properties || {}, user_id: r.userId,
+      valid_from: r.validFrom ? r.validFrom.toISOString() : null,
+      valid_to: r.validTo ? r.validTo.toISOString() : null,
+    };
+  }
+
+  private async listRelationshipsTool(
+    fromEntityId?: string, toEntityId?: string, relationshipType?: string,
+    includeHistory = false, at?: Date
+  ): Promise<ToolResult> {
+    const rows = this.storage.getRelationships(
+      fromEntityId, toEntityId, relationshipType as RelationshipType | undefined,
+      { includeAllVersions: includeHistory, at }
+    );
+    return {
+      success: true,
+      result: {
+        relationships: rows.map(r => this.relDict(r)),
+        count: rows.length,
+        as_of: at ? at.toISOString() : null,
+        include_history: includeHistory,
+      },
+    };
+  }
+
+  private async getConnectedTool(
+    entityId: string, relationshipType?: string, direction = 'both', at?: Date
+  ): Promise<ToolResult> {
+    if (!entityId) return { success: false, error: 'entity_id is required' };
+    if (!['outgoing', 'incoming', 'both'].includes(direction)) {
+      return { success: false, error: 'direction must be outgoing, incoming or both' };
+    }
+    const entity = this.storage.getEntity(entityId, undefined, at);
+    if (!entity) return { success: false, error: `Entity ${entityId} not found` };
+    const type = relationshipType as RelationshipType | undefined;
+    const connected: any[] = [];
+    if (direction !== 'incoming') {
+      for (const rel of this.storage.getRelationships(entityId, undefined, type, { at })) {
+        const target = this.storage.getEntity(rel.toEntityId, undefined, at);
+        if (target) connected.push({ entity: this.entityDict(target), relationship: this.relDict(rel), direction: 'outgoing' });
+      }
+    }
+    if (direction !== 'outgoing') {
+      for (const rel of this.storage.getRelationships(undefined, entityId, type, { at })) {
+        const source = this.storage.getEntity(rel.fromEntityId, undefined, at);
+        if (source) connected.push({ entity: this.entityDict(source), relationship: this.relDict(rel), direction: 'incoming' });
+      }
+    }
+    return {
+      success: true,
+      result: {
+        entity: { id: entity.id, name: entity.name, type: entity.entityType },
+        connected, count: connected.length, as_of: at ? at.toISOString() : null,
+      },
+    };
+  }
+
+  private entityDict(e: Entity) {
+    return { id: e.id, name: e.name, type: e.entityType, version: e.version, content: e.content };
+  }
+
+  /**
+   * End an edge -- the delete (ADR-004 §1). The row is kept as history. The
+   * client marks the edge pending so it travels as an end-event on the next
+   * push; this class only stores.
+   */
+  private async endRelationshipTool(
+    relationshipId: string, reason?: string, userId?: string, at?: Date
+  ): Promise<ToolResult> {
+    if (!relationshipId) return { success: false, error: 'relationship_id is required' };
+    const ended = this.storage.endRelationship(relationshipId, at);
+    if (!ended) return { success: true, result: { relationship_id: relationshipId, already_ended: true } };
+    return {
+      success: true,
+      result: {
+        relationship_id: relationshipId,
+        ended_at: ended.validTo ? ended.validTo.toISOString() : null,
+        reason: reason ?? null, user_id: userId ?? null,
+        relationship: this.relDict(ended),
+      },
+    };
+  }
+
+  /** What changed in (since, until]: ADR-004 §3's Diff operator, on the replica. */
+  private async getGraphDiffTool(since?: string, until?: string): Promise<ToolResult> {
+    const t1 = parseAt(since);
+    if (!t1) return { success: false, error: 'since is required' };
+    const t2 = parseAt(until) ?? new Date();
+    const inWindow = (d?: Date | null) => !!d && d.getTime() > t1.getTime() && d.getTime() <= t2.getTime();
+
+    const edges = this.storage.getRelationships(undefined, undefined, undefined, { includeAllVersions: true });
+    const started = edges.filter(r => inWindow(r.validFrom)).map(r => this.relDict(r));
+    const ended = edges.filter(r => inWindow(r.validTo ?? null)).map(r => this.relDict(r));
+
+    const lo = versionKeyAt(t1), hi = versionKeyAt(t2);
+    const changed: any[] = [];
+    for (const current of this.storage.getAllEntities(true)) {
+      const hits = this.storage.getEntityVersions(current.id).filter(v => v.version > lo && v.version <= hi);
+      if (hits.length === 0) continue;
+      const newest = hits.reduce((a, b) => (b.version > a.version ? b : a));
+      changed.push({
+        id: current.id, name: newest.name, type: newest.entityType,
+        versions_in_window: hits.length, latest_version_in_window: newest.version,
+        tombstoned: (newest.content as any)?.deleted === true,
+      });
+    }
+    return {
+      success: true,
+      result: {
+        since: t1.toISOString(), until: t2.toISOString(),
+        entities_changed: changed, edges_started: started, edges_ended: ended,
+        counts: { entities: changed.length, edges_started: started.length, edges_ended: ended.length },
+      },
+    };
+  }
+
   // --- Graph Algorithms ---
 
   /**
    * BFS path finding between entities
    */
-  async findPath(fromId: string, toId: string, maxDepth: number = 10): Promise<Entity[]> {
-    const startEntity = this.storage.getEntity(fromId);
+  async findPath(fromId: string, toId: string, maxDepth: number = 10, at?: Date): Promise<Entity[]> {
+    const startEntity = this.storage.getEntity(fromId, undefined, at);
     if (!startEntity) return [];
 
     if (fromId === toId) return [startEntity];
@@ -660,8 +825,8 @@ export class LocalGraphOperations {
       if (current.depth >= maxDepth) continue;
 
       // Get all neighbors (both directions)
-      const outgoing = this.storage.getRelationships(current.id);
-      const incoming = this.storage.getRelationships(undefined, current.id);
+      const outgoing = this.storage.getRelationships(current.id, undefined, undefined, { at });
+      const incoming = this.storage.getRelationships(undefined, current.id, undefined, { at });
 
       const neighborIds = [
         ...outgoing.map(r => r.toEntityId),
@@ -678,7 +843,7 @@ export class LocalGraphOperations {
           const path: Entity[] = [];
           let currentId: string | undefined = toId;
           while (currentId) {
-            const entity = this.storage.getEntity(currentId);
+            const entity = this.storage.getEntity(currentId, undefined, at);
             if (entity) path.unshift(entity);
             currentId = parentMap.get(currentId);
           }

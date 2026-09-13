@@ -336,7 +336,29 @@ export class KittenKongClient {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
     }
-    return this.graphOps.executeTool(toolName, args);
+    const result = await this.graphOps.executeTool(toolName, args);
+
+    // A tool that changes the local graph is a local edit, and a local edit
+    // must be pushed. This used to be missing for every MCP write: an entity
+    // created or an edge added through the MCP server lived only in this
+    // process and never reached FunkyGibbon, because nothing marked it
+    // pending. Ending an edge is the same -- it travels as an end-event.
+    if (result.success && this.syncEngine) {
+      const r = result.result ?? {};
+      switch (toolName) {
+        case 'create_entity':
+        case 'update_entity':
+          if (r.id) this.syncEngine.markEntityForSync(r.id);
+          break;
+        case 'create_relationship':
+          if (r.id) this.syncEngine.markRelationshipForSync(r.id, r.from);
+          break;
+        case 'end_relationship':
+          if (r.relationship_id && !r.already_ended) this.syncEngine.markRelationshipForSync(r.relationship_id);
+          break;
+      }
+    }
+    return result;
   }
 
   /**

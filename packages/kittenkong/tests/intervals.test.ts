@@ -172,3 +172,83 @@ describe('sync engine: intervals on the wire', () => {
     expect(storage.getRelationships(), 'the server must not resurrect a locally ended edge before it is adjudicated').toEqual([]);
   });
 });
+
+describe('relationship tools and the as-of surface (issue #85, ADR-004 §3, ADR-015)', () => {
+  let ctx: ReturnType<typeof makeEngine>;
+  beforeEach(async () => {
+    ctx = makeEngine();
+    await ctx.ops.storeEntity({ ...entity('device-1'), version: `${MARCH.toISOString().replace('Z', '000+00:00')}-000001-t` });
+    await ctx.ops.storeEntity({ ...entity('room-1', EntityType.ROOM), version: `${MARCH.toISOString().replace('Z', '000+00:00')}-000002-t` });
+    await ctx.ops.storeEntity({ ...entity('room-2', EntityType.ROOM), version: `${MARCH.toISOString().replace('Z', '000+00:00')}-000003-t` });
+    await ctx.ops.storeRelationship(edge('room-1', MARCH));
+    await ctx.ops.storeRelationship(edge('room-2', JUNE));
+  });
+
+  test('list_relationships: current by default, history on request, as of an instant', async () => {
+    const now = await ctx.ops.executeTool('list_relationships', { from_entity_id: 'device-1' });
+    const all = await ctx.ops.executeTool('list_relationships', { from_entity_id: 'device-1', include_history: true });
+    const april = await ctx.ops.executeTool('list_relationships', { from_entity_id: 'device-1', at: APRIL.toISOString() });
+    expect(now.result.relationships.map((r: any) => r.to_entity_id)).toEqual(['room-2']);
+    expect(all.result.count).toBe(2);
+    expect(april.result.relationships.map((r: any) => r.to_entity_id)).toEqual(['room-1']);
+  });
+
+  test('get_devices_in_room follows the move when asked as of April', async () => {
+    const then = await ctx.ops.executeTool('get_devices_in_room', { room_id: 'room-1', at: APRIL.toISOString() });
+    const now = await ctx.ops.executeTool('get_devices_in_room', { room_id: 'room-1' });
+    expect(then.result.devices.map((d: any) => d.id)).toEqual(['device-1']);
+    expect(now.result.devices).toEqual([]);
+  });
+
+  test('get_connected is the generic neighbourhood', async () => {
+    const r = await ctx.ops.executeTool('get_connected', { entity_id: 'room-2' });
+    expect(r.success).toBe(true);
+    expect(r.result.connected[0]).toMatchObject({ direction: 'incoming', entity: { id: 'device-1' } });
+  });
+
+  test('end_relationship is the delete and keeps history', async () => {
+    const r = await ctx.ops.executeTool('end_relationship', { relationship_id: 'rel-1', reason: 'moved out' });
+    expect(r.success).toBe(true);
+    expect(r.result.ended_at).toBeTruthy();
+    expect(ctx.storage.getRelationships()).toEqual([]);
+    expect(ctx.storage.getRelationships(undefined, undefined, undefined, { includeAllVersions: true })).toHaveLength(2);
+    const again = await ctx.ops.executeTool('end_relationship', { relationship_id: 'rel-1' });
+    expect(again.result.already_ended).toBe(true);
+  });
+
+  test('get_graph_diff reports the move', async () => {
+    const r = await ctx.ops.executeTool('get_graph_diff', { since: '2026-05-01T00:00:00Z', until: '2026-07-01T00:00:00Z' });
+    expect(r.result.edges_started.map((e: any) => e.to_entity_id)).toEqual(['room-2']);
+    expect(r.result.edges_ended.map((e: any) => e.to_entity_id)).toEqual(['room-1']);
+  });
+
+  test('a bad `at` is a tool error, not a crash', async () => {
+    const r = await ctx.ops.executeTool('get_devices_in_room', { room_id: 'room-1', at: 'yesterday-ish' }).catch(e => ({ success: false, error: String(e) }));
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('MCP writes reach the server: the client marks them pending', () => {
+  // This was missing for every MCP write: an entity created or an edge added
+  // through the MCP server lived only in this process and never synced.
+  test('create_entity, create_relationship and end_relationship are queued for push', async () => {
+    const { KittenKongClient } = await import('../src/client');
+    const client = new KittenKongClient({ serverUrl: SERVER, clientId: 'mcp-pending-test', authToken: 'x' });
+    // A sync engine exists once the client has an auth token; no network is used.
+    (client as any).syncEngine ??= new SyncEngine(SERVER, new AuthManager({ serverUrl: SERVER }), 'c', 'u');
+    (client as any).syncEngine.setGraphOperations((client as any).graphOps);
+
+    const home = await client.executeMCPTool('create_entity', { entity_type: 'room', name: 'Hall', content: {} });
+    const lamp = await client.executeMCPTool('create_entity', { entity_type: 'device', name: 'Lamp', content: {} });
+    expect(home.success && lamp.success).toBe(true);
+    const rel = await client.executeMCPTool('create_relationship', {
+      from_entity_id: lamp.result.id, to_entity_id: home.result.id, relationship_type: 'located_in',
+    });
+    expect(rel.success).toBe(true);
+    expect(client.pendingChangesCount).toBe(3);
+
+    const ended = await client.executeMCPTool('end_relationship', { relationship_id: rel.result.id });
+    expect(ended.success).toBe(true);
+    expect((client as any).syncEngine.pendingChangesCount).toBe(3); // same edge, still one mark
+  });
+});

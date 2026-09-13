@@ -169,6 +169,30 @@ export function isCurrentAt(rel: EntityRelationship, at: Date = new Date()): boo
   return true;
 }
 
+/**
+ * Upper bound on version strings for "state as of `at`" (ADR-004 §3.2).
+ *
+ * A version is `{utc-iso8601-with-microseconds}-{counter}-{user}` and sorts
+ * lexically in chronological order because the timestamp prefix is fixed-width
+ * UTC (PROTOCOL.md §2). Any version stamped at or before `at` sorts <= the ISO
+ * form of `at` followed by a byte greater than the `-` that starts the counter;
+ * `~` is that byte. Mirrors Python's `Entity.version_key_at`.
+ */
+export function versionKeyAt(at: Date): string {
+  const iso = at.toISOString().replace(/\.(\d{3})Z$/, '.$1000+00:00');
+  return `${iso}~`;
+}
+
+/** Parse a tool's `at` argument (ISO-8601; `Z`, offset or naive-as-UTC). */
+export function parseAt(value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value instanceof Date) return value;
+  const text = String(value).trim();
+  const d = new Date(/([+-]\d{2}:?\d{2}|Z)$/.test(text) ? text : `${text}Z`);
+  if (Number.isNaN(d.getTime())) throw new Error(`at is not a timestamp: ${text}`);
+  return d;
+}
+
 /** Do two interval starts name the same row? Tolerates undefined on both sides. */
 export function sameInstant(a?: Date | null, b?: Date | null): boolean {
   if (!a && !b) return true;
