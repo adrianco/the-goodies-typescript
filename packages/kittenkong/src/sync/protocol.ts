@@ -17,8 +17,8 @@
 /** The only protocol version the server accepts. A mismatch is HTTP 400. */
 export const PROTOCOL_VERSION = 'inbetweenies-v3';
 
-import type { AuthManager } from '../auth';
-import { createVersion, versionTimestamp } from './version';
+import type { AuthManager } from '../auth.js';
+import { createVersion, versionTimestamp } from './version.js';
 import { EntityType, SourceType } from '@the-goodies/inbetweenies';
 
 export interface SyncChange {

@@ -1,7 +1,8 @@
 {
   "name": "@the-goodies/kittenkong",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "TypeScript client for The Goodies FunkyGibbon server",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -27,5 +28,14 @@
     "tsx": "^4.19.3",
     "typescript": "^5.3.0",
     "vitest": "^1.0.0"
+  },
+  "bin": {
+    "kittenkong-mcp": "dist/mcp-server.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   }
 }

@@ -42,6 +42,30 @@ pnpm build
 
 The packages are not published to a registry; use them from this checkout.
 
+## Running the MCP server
+
+The built entry point runs under plain `node` and is also exposed as the
+`kittenkong-mcp` bin. Point an MCP client config at it:
+
+```json
+{
+  "mcpServers": {
+    "kittenkong": {
+      "command": "node",
+      "args": ["/abs/path/the-goodies-typescript/packages/kittenkong/dist/mcp-server.js"],
+      "env": { "FUNKYGIBBON_URL": "http://localhost:8000", "FUNKYGIBBON_TOKEN": "<client token from setup_auth>" }
+    }
+  }
+}
+```
+
+`FUNKYGIBBON_TOKEN` is preferred; `FUNKYGIBBON_PASSWORD` is the fallback.
+`SYNC_INTERVAL_SECONDS` (default 60) sets the background sync. The packages are
+ESM (`"type": "module"`, `.js` on every relative import, `NodeNext` resolution)
+so `pnpm build` output starts without `tsx`; `tests/dist-entrypoint.test.ts`
+launches the built file and speaks JSON-RPC to it, so a build that only works
+under tsx fails the suite (typescript#3).
+
 ## Quick Start
 
 ```typescript

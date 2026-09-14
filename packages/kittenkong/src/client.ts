@@ -10,10 +10,10 @@
 
 import type { Entity, SyncResult } from '@the-goodies/inbetweenies';
 import { EntityType, RelationshipType } from '@the-goodies/inbetweenies';
-import { AuthManager } from './auth';
-import { SyncEngine, type SyncObserver } from './sync/engine';
-import { LocalGraphStorage } from './graph/local-storage';
-import { LocalGraphOperations, type ToolResult } from './graph/local-operations';
+import { AuthManager } from './auth.js';
+import { SyncEngine, type SyncObserver } from './sync/engine.js';
+import { LocalGraphStorage } from './graph/local-storage.js';
+import { LocalGraphOperations, type ToolResult } from './graph/local-operations.js';
 
 export interface KittenKongOptions {
   serverUrl: string;

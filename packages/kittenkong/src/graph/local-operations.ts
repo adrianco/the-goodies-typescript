@@ -14,7 +14,7 @@ import {
   type Entity,
   type EntityRelationship,
 } from '@the-goodies/inbetweenies';
-import { LocalGraphStorage, type SearchResult } from './local-storage';
+import { LocalGraphStorage, type SearchResult } from './local-storage.js';
 
 export interface ToolResult {
   success: boolean;

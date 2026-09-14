@@ -7,11 +7,11 @@
 
 import type { Entity, EntityRelationship, SyncMetadata, SyncResult, Conflict, RelationshipType } from '@the-goodies/inbetweenies';
 import { EntityType, SourceType } from '@the-goodies/inbetweenies';
-import type { AuthManager } from '../auth';
-import { InbetweeniesProtocol, type Change, type RelationshipChange } from './protocol';
-import { ConflictResolver } from './conflict-resolver';
-import { createVersion } from './version';
-import { LocalGraphOperations } from '../graph/local-operations';
+import type { AuthManager } from '../auth.js';
+import { InbetweeniesProtocol, type Change, type RelationshipChange } from './protocol.js';
+import { ConflictResolver } from './conflict-resolver.js';
+import { createVersion } from './version.js';
+import { LocalGraphOperations } from '../graph/local-operations.js';
 
 export type SyncObserver = (event: string, data: any) => void | Promise<void>;
 

@@ -5,4 +5,4 @@
  * Port of Python inbetweenies package
  */
 
-export * from './types';
+export * from './types.js';
